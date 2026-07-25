@@ -1,0 +1,55 @@
+{
+  "model": "claude-haiku-4-5-20251001",
+  "max_tokens": 1024,
+  "whisper_model": "base",
+  "context_char_cap": 4000,
+
+  "dictionary": [
+    "Heiko",
+    "Senacor",
+    "EN-",
+    "Confluence",
+    "Jira"
+  ],
+
+  "//": "Denylist is ON by default: apps opt IN. Anything not listed here gets the raw transcript and nothing leaves the machine.",
+  "llm_opt_in_bundle_ids": [
+    "com.tinyspeck.slackmacgap",
+    "com.microsoft.VSCode"
+  ],
+
+  "//context": "Narrower still: only these apps have their on-screen text sent to the API.",
+  "context_opt_in_bundle_ids": [
+    "com.tinyspeck.slackmacgap"
+  ],
+
+  "denied_bundle_ids": [
+    "com.apple.keychainaccess",
+    "com.1password.1password",
+    "com.agilebits.onepassword7"
+  ],
+
+  "insert_raw_first": false,
+
+  "modes": [
+    {
+      "name": "slack",
+      "match_bundle_ids": ["com.tinyspeck.slackmacgap"],
+      "prompt": "You rewrite dictated speech into a Slack message.\nPreserve the speaker's intent and tone; do not add content.\nUse @mentions for names that appear in the provided channel context.\nKeep ticket keys like EN-66 uppercase. Use Slack markdown.\nOutput only the message text."
+    },
+    {
+      "name": "code",
+      "match_bundle_ids": ["com.microsoft.VSCode", "com.todesktop.230313mzl4w4u92"],
+      "prompt": "You rewrite dictated speech into text for a code editor.\nIdentifiers, file paths, and type names keep their exact casing.\nDo not explain and do not add commentary.\nOutput only the text to insert."
+    },
+    {
+      "name": "jira",
+      "match_window_title_regex": "(Jira|Confluence)",
+      "prompt": "You rewrite dictated speech into a ticket comment.\nKeep ticket keys like EN-66 uppercase. Use plain prose, no headings.\nOutput only the comment text."
+    },
+    {
+      "name": "default",
+      "prompt": "Clean up filler words and punctuation. Change nothing else. Output only the cleaned text."
+    }
+  ]
+}
