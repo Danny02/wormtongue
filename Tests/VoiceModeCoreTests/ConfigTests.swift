@@ -86,6 +86,34 @@ struct ConfigTests {
         #expect(restored == Config.seed)
     }
 
+    @Test("Every field round-trips at a non-default value")
+    func roundTripsWithNonDefaults() throws {
+        // Comparing a round-tripped default against the default proves nothing: a
+        // key that fails to decode falls back to exactly the value being compared.
+        var config = Config.seed
+        config.model = "some-other-model"
+        config.maxTokens = 4321
+        config.apiBaseURL = "https://gw.example.com/anthropic"
+        config.apiHeaders = ["x-gw": "token"]
+        config.localModel = "mlx-community/other"
+        config.localOptInBundleIds = ["local.app"]
+        config.whisperModel = "tiny"
+        config.contextCharCap = 111
+        config.fieldCharCap = 222
+        config.dictionary = ["Heiko"]
+        config.llmOptInBundleIds = ["llm.app"]
+        config.editOptInBundleIds = ["edit.app"]
+        config.contextOptInBundleIds = ["ctx.app"]
+        config.deniedBundleIds = ["denied.app"]
+        config.hotkeyMode = .toggle
+        config.insertRawFirst = true
+        config.showOverlay = false
+        config.soundFeedback = false
+
+        let restored = try Config.decode(config.encoded())
+        #expect(restored == config)
+    }
+
     @Test("The shipped example config parses and matches its documented intent")
     func exampleConfigParses() throws {
         // Walk up from Tests/VoiceModeCoreTests/ to the package root.

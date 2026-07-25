@@ -1,25 +1,53 @@
 import Foundation
 
+/// Where an utterance's rewrite runs, if it runs at all.
+public enum RewriteDestination: String, Sendable, Equatable {
+    /// No rewrite: the raw transcript goes straight in.
+    case none
+    /// On this Mac, via MLX. Nothing leaves the machine.
+    case local
+    /// The Messages API, over the network.
+    case cloud
+
+    public var label: String {
+        switch self {
+        case .none: return "raw"
+        case .local: return "on-device"
+        case .cloud: return "API"
+        }
+    }
+}
+
 /// What the privacy rules decided for one utterance.
 ///
-/// A ladder, each rung strictly wider than the last: the rewrite pass, then the
-/// focused field's own text, then everything visible in the window. Editing an
-/// existing draft requires the middle rung — you cannot revise text you were not
-/// allowed to read.
+/// For the cloud pass this is a ladder, each rung strictly wider than the last:
+/// the rewrite, then the focused field's own text, then everything visible in the
+/// window. Editing an existing draft requires the middle rung — you cannot revise
+/// text you were not allowed to read.
+///
+/// The local pass sits outside that ladder. Nothing crosses a boundary, so the
+/// field and the window are available to it without any opt-in.
 public struct Policy: Sendable, Equatable {
-    /// Hard-denied app: raw transcript, not even probed, nothing sent.
+    /// Hard-denied app: raw transcript, not even probed, nothing sent, no rewrite
+    /// even locally.
     public var denied: Bool
-    /// App opted in to the LLM rewrite pass.
-    public var llmAllowed: Bool
-    /// App opted in to having the focused field's own content sent, which is what
-    /// makes selection replacement and draft revision possible.
+    public var destination: RewriteDestination
+    /// The focused field's own content may be read and used, which is what makes
+    /// selection replacement and draft revision possible.
     public var fieldAllowed: Bool
-    /// App opted in to having its surrounding on-screen text sent along.
+    /// The surrounding on-screen text may be read and used.
     public var contextAllowed: Bool
 
-    public init(denied: Bool, llmAllowed: Bool, fieldAllowed: Bool, contextAllowed: Bool) {
+    public var rewriteAllowed: Bool { destination != .none }
+    /// True only when context actually leaves the machine — this is what the
+    /// visible indicator should reflect, not `contextAllowed`.
+    public var contextLeavesMachine: Bool { contextAllowed && destination == .cloud }
+
+    public init(
+        denied: Bool, destination: RewriteDestination, fieldAllowed: Bool, contextAllowed: Bool
+    ) {
         self.denied = denied
-        self.llmAllowed = llmAllowed
+        self.destination = destination
         self.fieldAllowed = fieldAllowed
         self.contextAllowed = contextAllowed
     }
@@ -35,6 +63,7 @@ public struct ModeResolver: Sendable {
     public let config: Config
 
     private let llmOptIn: Set<String>
+    private let localOptIn: Set<String>
     private let editOptIn: Set<String>
     private let contextOptIn: Set<String>
     private let denied: Set<String>
@@ -46,6 +75,7 @@ public struct ModeResolver: Sendable {
     public init(config: Config) {
         self.config = config
         self.llmOptIn = Set(config.llmOptInBundleIds)
+        self.localOptIn = Set(config.localOptInBundleIds)
         self.editOptIn = Set(config.editOptInBundleIds)
         self.contextOptIn = Set(config.contextOptInBundleIds)
         self.denied = Set(config.deniedBundleIds)
@@ -97,12 +127,16 @@ public struct ModeResolver: Sendable {
         }
     }
 
-    /// Bundle ids listed on a wider rung but missing from `llmOptInBundleIds`, which
-    /// makes them inert: every rung above the first is meaningless without the
-    /// rewrite pass to consume it. Silence here would look like a broken feature.
+    /// Bundle ids listed on a wider rung with no rewrite pass to consume it, which
+    /// makes them inert. Silence here would look like a broken feature.
     public var inertOptIns: [String] {
-        let wider = editOptIn.union(contextOptIn)
-        return wider.subtracting(llmOptIn).sorted()
+        editOptIn.union(contextOptIn).subtracting(llmOptIn).subtracting(localOptIn).sorted()
+    }
+
+    /// Apps listed for both passes. Not an error — the local pass wins, being the
+    /// more private of the two — but worth saying so it is not a surprise.
+    public var localOverridesCloud: [String] {
+        localOptIn.intersection(llmOptIn).sorted()
     }
 
     // MARK: - Policy
@@ -111,21 +145,31 @@ public struct ModeResolver: Sendable {
         // An app we cannot identify is treated as not opted in.
         guard let bundleId else {
             return Policy(
-                denied: false, llmAllowed: false, fieldAllowed: false, contextAllowed: false)
+                denied: false, destination: .none, fieldAllowed: false, contextAllowed: false)
         }
         if denied.contains(bundleId) {
             return Policy(
-                denied: true, llmAllowed: false, fieldAllowed: false, contextAllowed: false)
+                denied: true, destination: .none, fieldAllowed: false, contextAllowed: false)
         }
+
+        // The local pass wins when an app is listed for both: it is strictly more
+        // private, and quietly picking the network instead would be the wrong
+        // surprise to spring on someone.
+        if localOptIn.contains(bundleId) {
+            // Nothing crosses a boundary, so there is nothing to opt in to.
+            return Policy(
+                denied: false, destination: .local, fieldAllowed: true, contextAllowed: true)
+        }
+
         let llm = llmOptIn.contains(bundleId)
         // Sending the whole window already includes the field inside it, so
         // context opt-in implies field opt-in.
         let context = llm && contextOptIn.contains(bundleId)
         return Policy(
             denied: false,
-            llmAllowed: llm,
+            destination: llm ? .cloud : .none,
             fieldAllowed: llm && (context || editOptIn.contains(bundleId)),
-            // Context without an LLM pass is meaningless — nothing would consume it.
+            // Context without a rewrite pass is meaningless — nothing would consume it.
             contextAllowed: context
         )
     }
@@ -152,14 +196,36 @@ public struct ModeResolver: Sendable {
     ///
     /// The mode prompt is the user's; it owns voice and formatting. The editing
     /// block is ours and owns mechanics, so the two do not fight.
-    public func systemPrompt(for mode: Mode, intent: EditIntent = .compose) -> String {
+    /// - Parameter structuredOutput: whether the destination can enforce a JSON
+    ///   schema. The API can; a local model cannot, so it has to be asked in prose.
+    public func systemPrompt(
+        for mode: Mode, intent: EditIntent = .compose, structuredOutput: Bool = true
+    ) -> String {
         var parts = [mode.prompt]
         if let dictionaryBlock { parts.append(dictionaryBlock) }
-        parts.append(Self.editingBlock(for: intent))
+        parts.append(Self.editingBlock(for: intent, structuredOutput: structuredOutput))
         return parts.joined(separator: "\n\n")
     }
 
-    static func editingBlock(for intent: EditIntent) -> String {
+    static func editingBlock(for intent: EditIntent, structuredOutput: Bool = true) -> String {
+        let block = baseEditingBlock(for: intent)
+        // Without a schema to enforce it, the shape has to be spelled out — and a
+        // small local model needs the example more than a frontier one does.
+        guard intent.needsDecision, !structuredOutput else { return block }
+        return block + "\n\n" + """
+            <output_format>
+            Reply with one JSON object and nothing else — no prose before or after,
+            no code fence:
+
+            {"action": "insert", "text": "..."}
+
+            "action" is exactly "insert" or "replace_all". "text" is the text to
+            insert, or the complete new field content for "replace_all".
+            </output_format>
+            """
+    }
+
+    private static func baseEditingBlock(for intent: EditIntent) -> String {
         switch intent {
         case .compose:
             return """

@@ -32,9 +32,9 @@ struct HistoryView: View {
                         .font(.caption2)
                         .foregroundStyle(.orange)
                 }
-                if !dictation.llmUsed {
-                    Text("raw").font(.caption2).foregroundStyle(.secondary)
-                }
+                Text(dictation.destination.label)
+                    .font(.caption2)
+                    .foregroundStyle(dictation.destination == .cloud ? .secondary : .green)
                 if dictation.action.isDestructive {
                     Label(dictation.action.label, systemImage: "pencil.and.outline")
                         .font(.caption2)

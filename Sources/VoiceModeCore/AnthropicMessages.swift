@@ -35,9 +35,6 @@ public enum AnthropicError: Error, LocalizedError, Equatable {
 /// (Python/TypeScript only, built for multi-turn tool loops) and not an official
 /// Swift SDK — there isn't one — so this is the raw HTTP shape.
 public enum AnthropicMessages {
-    public static let endpoint = URL(string: "https://api.anthropic.com/v1/messages")!
-    /// GET-able, free, and cheap: used only to warm the TLS connection.
-    public static let modelsEndpoint = URL(string: "https://api.anthropic.com/v1/models")!
     public static let apiVersion = "2023-06-01"
 
     // MARK: - Request

@@ -5,8 +5,11 @@ import VoiceModeCore
 ///
 /// Wire types and response parsing live in `VoiceModeCore.AnthropicMessages` so
 /// they can be unit-tested; this is the transport.
-actor AnthropicClient {
+actor AnthropicClient: Rewriter {
     private let session: URLSession
+    /// Overridable so the app can be pointed at a gateway or a local mock.
+    private var endpoint: APIEndpoint = .anthropic
+    private var extraHeaders: [String: String] = [:]
     /// HTTP/2 connections idle out after about a minute, so re-warming more often
     /// than that is wasted work and less often is a cold handshake.
     private let warmInterval = Duration.seconds(50)
@@ -22,6 +25,21 @@ actor AnthropicClient {
         self.session = URLSession(configuration: configuration)
     }
 
+    /// Applied on every config load.
+    func configure(endpoint: APIEndpoint, headers: [String: String]) {
+        if endpoint != self.endpoint {
+            // A different host means the warm connection is to the wrong place.
+            lastWarmed = nil
+            log.info("API endpoint set to \(endpoint.base.absoluteString, privacy: .public)")
+        }
+        self.endpoint = endpoint
+        self.extraHeaders = headers
+    }
+
+    func prewarm(model: String) async {
+        await warmConnection()
+    }
+
     /// Opens the TLS connection ahead of the real request.
     ///
     /// `/v1/models` is a free GET, so this costs nothing but saves the DNS + TCP +
@@ -33,10 +51,9 @@ actor AnthropicClient {
         if let lastWarmed, lastWarmed.duration(to: ContinuousClock.now) < warmInterval { return }
         lastWarmed = ContinuousClock.now
 
-        var request = URLRequest(url: AnthropicMessages.modelsEndpoint)
+        var request = URLRequest(url: endpoint.models)
         request.httpMethod = "GET"
-        request.setValue(apiKey, forHTTPHeaderField: "x-api-key")
-        request.setValue(AnthropicMessages.apiVersion, forHTTPHeaderField: "anthropic-version")
+        applyHeaders(to: &request, apiKey: apiKey)
         // Result is irrelevant — we only want the socket open.
         _ = try? await session.data(for: request)
     }
@@ -77,12 +94,11 @@ actor AnthropicClient {
     private func send(_ body: Data) async throws -> (status: Int, data: Data) {
         guard let apiKey = Keychain.apiKey() else { throw AnthropicError.missingAPIKey }
 
-        var request = URLRequest(url: AnthropicMessages.endpoint)
+        var request = URLRequest(url: endpoint.messages)
         request.httpMethod = "POST"
         request.httpBody = body
         request.setValue("application/json", forHTTPHeaderField: "content-type")
-        request.setValue(apiKey, forHTTPHeaderField: "x-api-key")
-        request.setValue(AnthropicMessages.apiVersion, forHTTPHeaderField: "anthropic-version")
+        applyHeaders(to: &request, apiKey: apiKey)
 
         let data: Data
         let response: URLResponse
@@ -102,5 +118,15 @@ actor AnthropicClient {
             _ = try AnthropicMessages.text(fromStatus: status, body: data)
         }
         return (status, data)
+    }
+
+    /// Extra headers go on first so the built-ins win: the API key comes from the
+    /// Keychain and must not be overridable from a plaintext config file.
+    private func applyHeaders(to request: inout URLRequest, apiKey: String) {
+        for (name, value) in extraHeaders {
+            request.setValue(value, forHTTPHeaderField: name)
+        }
+        request.setValue(apiKey, forHTTPHeaderField: "x-api-key")
+        request.setValue(AnthropicMessages.apiVersion, forHTTPHeaderField: "anthropic-version")
     }
 }

@@ -19,6 +19,12 @@ enum InsertionMethod: String {
 @MainActor
 final class TextInserter {
     private let pasteboardRestoreDelay: TimeInterval = 0.35
+    /// The user's pasteboard as it was before *our first* paste of a sequence.
+    /// Two pastes in quick succession — raw-first then the replacement — used to
+    /// leave it clobbered: the second paste bumped the change count, the first
+    /// restore saw the mismatch and bailed, and nothing ever put it back.
+    private var savedPasteboard: [[NSPasteboard.PasteboardType: Data]]?
+    private var restoreTask: Task<Void, Never>?
 
     func insert(_ text: String, into element: AXUIElement?) -> InsertionMethod {
         guard !text.isEmpty else { return .aborted }
@@ -108,7 +114,10 @@ final class TextInserter {
 
     private func paste(_ text: String) {
         let pasteboard = NSPasteboard.general
-        let saved = snapshot(pasteboard)
+        // A restore already pending means this is the second paste of a sequence;
+        // keep the *original* snapshot rather than saving our own text over it.
+        restoreTask?.cancel()
+        if savedPasteboard == nil { savedPasteboard = snapshot(pasteboard) }
 
         pasteboard.clearContents()
         pasteboard.setString(text, forType: .string)
@@ -117,10 +126,16 @@ final class TextInserter {
         tap(keyCode: CGKeyCode(kVK_ANSI_V), flags: .maskCommand)
 
         // Give the target app time to read the pasteboard before we put it back.
-        Task { [pasteboardRestoreDelay] in
+        restoreTask = Task { [pasteboardRestoreDelay] in
             try? await Task.sleep(for: .seconds(pasteboardRestoreDelay))
-            // If something else wrote to the pasteboard in the meantime, leave it alone.
+            guard !Task.isCancelled else { return }
+            defer {
+                savedPasteboard = nil
+                restoreTask = nil
+            }
+            // Someone else wrote to the pasteboard after us: theirs wins.
             guard pasteboard.changeCount == ourChangeCount else { return }
+            guard let saved = savedPasteboard else { return }
             restore(saved, to: pasteboard)
         }
     }

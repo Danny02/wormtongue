@@ -9,6 +9,12 @@ public struct Mode: Codable, Sendable, Equatable {
     public var model: String?
     public var prompt: String
 
+    enum CodingKeys: String, CodingKey {
+        case name, model, prompt
+        case matchBundleIds = "match_bundle_ids"
+        case matchWindowTitleRegex = "match_window_title_regex"
+    }
+
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         name = try c.decode(String.self, forKey: .name)
@@ -33,19 +39,55 @@ public struct Mode: Codable, Sendable, Equatable {
     }
 }
 
+/// Push-to-talk, or press once to start and again to stop.
+///
+/// §8 of the brief left this open; both are implemented and the config picks.
+public enum HotkeyMode: String, Codable, Sendable, Equatable {
+    case hold
+    case toggle
+}
+
 /// JSON at ~/.config/voicemode/config.json.
 ///
 /// The brief allowed TOML or JSON; JSON avoids pulling in a TOML parser
 /// dependency for a file only this app reads.
 ///
 /// Every key is optional on decode: a config missing half its fields loads with
-/// defaults for the rest rather than failing, so one typo cannot brick the app.
+/// defaults for the rest rather than refusing to start, so one typo cannot brick
+/// the app.
 public struct Config: Codable, Sendable, Equatable {
+    // MARK: Rewrite pass
+
     public var model: String
     public var maxTokens: Int
+    /// Base URL for the Messages API. Point this at a gateway, a proxy, or a local
+    /// mock; the wire format is unchanged. An invalid value falls back to
+    /// Anthropic's host and is reported.
+    public var apiBaseURL: String
+    /// Extra request headers, for gateways that need their own auth. Applied first,
+    /// so the built-in `x-api-key` and `anthropic-version` always win — the key
+    /// stays in the Keychain and cannot be overridden from a plaintext file.
+    public var apiHeaders: [String: String]
+
+    // MARK: Local pass
+
+    /// Hugging Face id of an MLX model for the on-device rewrite pass. Only
+    /// meaningful in a build made with the local pass enabled.
+    public var localModel: String
+    /// Apps whose rewrite runs **on this Mac** instead of hitting the API. Answers
+    /// §8 of the brief: sensitive apps get a real rewrite rather than the pass being
+    /// skipped. Nothing leaves the machine, so these apps get field and window
+    /// context without needing the opt-in rungs below.
+    public var localOptInBundleIds: [String]
+
+    // MARK: Transcription
+
     /// WhisperKit model name. Start with "base" — it downloads in seconds.
     /// Move to "large-v3-v20240930_turbo" once the pipeline works.
     public var whisperModel: String
+
+    // MARK: Context and privacy
+
     /// Hard cap on surrounding-text characters sent to the API.
     public var contextCharCap: Int
     /// Hard cap on the focused field's own content. A field longer than this is
@@ -55,8 +97,8 @@ public struct Config: Codable, Sendable, Equatable {
     /// Proper nouns, ticket prefixes, internal jargon. Injected into every
     /// system prompt — the cheap substitute for fine-tuning.
     public var dictionary: [String]
-    /// Denylist is on by default: apps opt IN to the LLM pass. Anything not
-    /// listed here gets the raw transcript inserted, nothing leaves the machine.
+    /// Denylist is on by default: apps opt IN to the cloud rewrite pass. Anything
+    /// not listed here gets the raw transcript inserted, nothing leaves the machine.
     public var llmOptInBundleIds: [String]
     /// Apps allowed to have the *focused field's own* content sent. This is what
     /// enables editing an existing draft — replacing a selection, or acting on an
@@ -65,9 +107,14 @@ public struct Config: Codable, Sendable, Equatable {
     public var editOptInBundleIds: [String]
     /// Widest rung: apps allowed to have their surrounding on-screen text sent.
     public var contextOptInBundleIds: [String]
-    /// Hard denies. Never transcribe, never probe, never send. Wins over everything.
+    /// Hard denies. Never transcribe, never probe, never send, never rewrite — not
+    /// even locally. Wins over everything.
     public var deniedBundleIds: [String]
-    /// Insert the raw transcript immediately, then replace it when the LLM
+
+    // MARK: Behaviour
+
+    public var hotkeyMode: HotkeyMode
+    /// Insert the raw transcript immediately, then replace it when the rewrite
     /// returns. Off by default — replacement is backspace-based and fragile.
     public var insertRawFirst: Bool
     /// Floating status overlay near the bottom of the screen.
@@ -79,6 +126,10 @@ public struct Config: Codable, Sendable, Equatable {
     public static let fallback = Config(
         model: "claude-haiku-4-5-20251001",
         maxTokens: 1024,
+        apiBaseURL: "https://api.anthropic.com",
+        apiHeaders: [:],
+        localModel: "mlx-community/Qwen3-4B-4bit",
+        localOptInBundleIds: [],
         whisperModel: "base",
         contextCharCap: 4000,
         fieldCharCap: 4000,
@@ -91,6 +142,7 @@ public struct Config: Codable, Sendable, Equatable {
             "com.1password.1password",
             "com.agilebits.onepassword7",
         ],
+        hotkeyMode: .hold,
         insertRawFirst: false,
         showOverlay: true,
         soundFeedback: true,
@@ -103,11 +155,41 @@ public struct Config: Codable, Sendable, Equatable {
         ]
     )
 
+    /// Spelled out rather than relying on `.convertFromSnakeCase`, which is not the
+    /// inverse of `.convertToSnakeCase` for names containing acronyms: it turns
+    /// `api_base_url` into `apiBaseUrl`, missing `apiBaseURL` entirely.
+    enum CodingKeys: String, CodingKey {
+        case model, dictionary, modes
+        case maxTokens = "max_tokens"
+        case apiBaseURL = "api_base_url"
+        case apiHeaders = "api_headers"
+        case localModel = "local_model"
+        case localOptInBundleIds = "local_opt_in_bundle_ids"
+        case whisperModel = "whisper_model"
+        case contextCharCap = "context_char_cap"
+        case fieldCharCap = "field_char_cap"
+        case llmOptInBundleIds = "llm_opt_in_bundle_ids"
+        case editOptInBundleIds = "edit_opt_in_bundle_ids"
+        case contextOptInBundleIds = "context_opt_in_bundle_ids"
+        case deniedBundleIds = "denied_bundle_ids"
+        case hotkeyMode = "hotkey_mode"
+        case insertRawFirst = "insert_raw_first"
+        case showOverlay = "show_overlay"
+        case soundFeedback = "sound_feedback"
+    }
+
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         let d = Config.fallback
         model = try c.decodeIfPresent(String.self, forKey: .model) ?? d.model
         maxTokens = try c.decodeIfPresent(Int.self, forKey: .maxTokens) ?? d.maxTokens
+        apiBaseURL = try c.decodeIfPresent(String.self, forKey: .apiBaseURL) ?? d.apiBaseURL
+        apiHeaders =
+            try c.decodeIfPresent([String: String].self, forKey: .apiHeaders) ?? d.apiHeaders
+        localModel = try c.decodeIfPresent(String.self, forKey: .localModel) ?? d.localModel
+        localOptInBundleIds =
+            try c.decodeIfPresent([String].self, forKey: .localOptInBundleIds)
+            ?? d.localOptInBundleIds
         whisperModel = try c.decodeIfPresent(String.self, forKey: .whisperModel) ?? d.whisperModel
         contextCharCap =
             try c.decodeIfPresent(Int.self, forKey: .contextCharCap) ?? d.contextCharCap
@@ -123,6 +205,8 @@ public struct Config: Codable, Sendable, Equatable {
             ?? d.contextOptInBundleIds
         deniedBundleIds =
             try c.decodeIfPresent([String].self, forKey: .deniedBundleIds) ?? d.deniedBundleIds
+        // An unrecognised hotkey mode falls back rather than failing the decode.
+        hotkeyMode = (try? c.decodeIfPresent(HotkeyMode.self, forKey: .hotkeyMode)) ?? d.hotkeyMode
         insertRawFirst =
             try c.decodeIfPresent(Bool.self, forKey: .insertRawFirst) ?? d.insertRawFirst
         showOverlay = try c.decodeIfPresent(Bool.self, forKey: .showOverlay) ?? d.showOverlay
@@ -135,6 +219,10 @@ public struct Config: Codable, Sendable, Equatable {
     public init(
         model: String,
         maxTokens: Int,
+        apiBaseURL: String,
+        apiHeaders: [String: String],
+        localModel: String,
+        localOptInBundleIds: [String],
         whisperModel: String,
         contextCharCap: Int,
         fieldCharCap: Int,
@@ -143,6 +231,7 @@ public struct Config: Codable, Sendable, Equatable {
         editOptInBundleIds: [String],
         contextOptInBundleIds: [String],
         deniedBundleIds: [String],
+        hotkeyMode: HotkeyMode,
         insertRawFirst: Bool,
         showOverlay: Bool,
         soundFeedback: Bool,
@@ -150,6 +239,10 @@ public struct Config: Codable, Sendable, Equatable {
     ) {
         self.model = model
         self.maxTokens = maxTokens
+        self.apiBaseURL = apiBaseURL
+        self.apiHeaders = apiHeaders
+        self.localModel = localModel
+        self.localOptInBundleIds = localOptInBundleIds
         self.whisperModel = whisperModel
         self.contextCharCap = contextCharCap
         self.fieldCharCap = fieldCharCap
@@ -158,23 +251,24 @@ public struct Config: Codable, Sendable, Equatable {
         self.editOptInBundleIds = editOptInBundleIds
         self.contextOptInBundleIds = contextOptInBundleIds
         self.deniedBundleIds = deniedBundleIds
+        self.hotkeyMode = hotkeyMode
         self.insertRawFirst = insertRawFirst
         self.showOverlay = showOverlay
         self.soundFeedback = soundFeedback
         self.modes = modes
     }
 
+    /// The parsed endpoint, or nil when `apiBaseURL` is unusable.
+    public var endpoint: APIEndpoint? { APIEndpoint(base: apiBaseURL) }
+
     // MARK: - Coding
 
     public static func decode(_ data: Data) throws -> Config {
-        let decoder = JSONDecoder()
-        decoder.keyDecodingStrategy = .convertFromSnakeCase
-        return try decoder.decode(Config.self, from: data)
+        try JSONDecoder().decode(Config.self, from: data)
     }
 
     public func encoded() throws -> Data {
         let encoder = JSONEncoder()
-        encoder.keyEncodingStrategy = .convertToSnakeCase
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         return try encoder.encode(self)
     }
@@ -182,10 +276,14 @@ public struct Config: Codable, Sendable, Equatable {
 
 extension Config {
     /// What lands on disk the first time the app runs — the modes from §5 of the
-    /// brief, with the opt-in lists empty so nothing is sent until the user says so.
+    /// brief, with every opt-in list empty so nothing is sent until the user says so.
     public static let seed = Config(
         model: "claude-haiku-4-5-20251001",
         maxTokens: 1024,
+        apiBaseURL: "https://api.anthropic.com",
+        apiHeaders: [:],
+        localModel: "mlx-community/Qwen3-4B-4bit",
+        localOptInBundleIds: [],
         whisperModel: "base",
         contextCharCap: 4000,
         fieldCharCap: 4000,
@@ -194,6 +292,7 @@ extension Config {
         editOptInBundleIds: [],
         contextOptInBundleIds: [],
         deniedBundleIds: Config.fallback.deniedBundleIds,
+        hotkeyMode: .hold,
         insertRawFirst: false,
         showOverlay: true,
         soundFeedback: true,

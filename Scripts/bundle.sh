@@ -6,11 +6,29 @@
 # so TCC refuses to prompt. Hence this wrapper.
 set -euo pipefail
 
-CONFIG="${1:-release}"
+CONFIG="release"
+for arg in "$@"; do
+	case "$arg" in
+	debug | release) CONFIG="$arg" ;;
+	--local-pass)
+		# Pulls in MLX and enables the on-device rewrite pass. Large dependency,
+		# multi-GB model downloads, and needs a Swift 6.1+ toolchain.
+		export VOICEMODE_LOCAL_PASS=1
+		;;
+	*)
+		echo "usage: $0 [debug|release] [--local-pass]" >&2
+		exit 2
+		;;
+	esac
+done
+
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 APP="$ROOT/build/VoiceMode.app"
 
 cd "$ROOT"
+if [ "${VOICEMODE_LOCAL_PASS:-}" = "1" ]; then
+	echo "building with the on-device rewrite pass"
+fi
 swift build -c "$CONFIG"
 BIN="$(swift build -c "$CONFIG" --show-bin-path)/VoiceMode"
 

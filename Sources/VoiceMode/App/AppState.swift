@@ -12,7 +12,7 @@ struct Dictation: Identifiable {
     var raw: String
     var result: String
     var contextSent: Bool
-    var llmUsed: Bool
+    var destination: RewriteDestination
     var intent: EditIntent
     var action: InsertionAction
     var method: InsertionMethod
@@ -24,6 +24,7 @@ struct Dictation: Identifiable {
     var focusedElement: AXUIElement?
 
     var appName: String? { context.appName }
+    var llmUsed: Bool { destination != .none }
     /// Revertable when we overwrote something and know what it was.
     var canRevert: Bool { action.isDestructive && previousFieldValue != nil }
 }
@@ -57,15 +58,18 @@ final class AppState: ObservableObject {
     @Published private(set) var activeModeName: String?
     @Published private(set) var lastResultPreview: String?
     @Published private(set) var activeIntent: EditIntent = .compose
+    @Published private(set) var activeDestination: RewriteDestination = .none
     /// Drives the "Revert last edit" affordance.
     @Published private(set) var revertable: Dictation?
     @Published private(set) var config: Config = .fallback
+    @Published private(set) var activeEndpoint: APIEndpoint = .anthropic
 
     private let recorder = AudioRecorder()
     private let transcriber = Transcriber()
     private let contextProbe = ContextProbe()
     private let inserter = TextInserter()
     private let anthropic = AnthropicClient()
+    private let localRewriter = LocalRewriter()
     private let overlay = OverlayController()
 
     /// Rebuilt only when the config changes — it precompiles regexes and builds
@@ -80,6 +84,19 @@ final class AppState: ObservableObject {
     private var levelTask: Task<Void, Never>?
     private var didBootstrap = false
     private let historyLimit = 25
+
+    private func rewriter(for destination: RewriteDestination) -> any Rewriter {
+        destination == .local ? localRewriter : anthropic
+    }
+
+    /// Whether this build has the on-device pass compiled in.
+    var localPassAvailable: Bool {
+        #if VOICEMODE_LOCAL_PASS
+        return true
+        #else
+        return false
+        #endif
+    }
 
     var failureMessage: String? {
         if case let .failed(message) = phase { return message }
@@ -141,6 +158,17 @@ final class AppState: ObservableObject {
 
         var problems: [String] = []
         if let error { problems.append(error) }
+
+        // A bad base URL falls back rather than bricking the rewrite pass.
+        let endpoint = loaded.endpoint ?? .anthropic
+        if loaded.endpoint == nil {
+            problems.append(
+                "api_base_url is not a usable http(s) URL, using \(APIEndpoint.anthropic.base.absoluteString) — \(loaded.apiBaseURL)"
+            )
+        }
+        let headers = loaded.apiHeaders
+        Task { [anthropic] in await anthropic.configure(endpoint: endpoint, headers: headers) }
+        activeEndpoint = endpoint
         let badPatterns = resolver.invalidTitlePatterns
         if !badPatterns.isEmpty {
             problems.append("Unusable window title regex — \(badPatterns.joined(separator: "; "))")
@@ -148,14 +176,32 @@ final class AppState: ObservableObject {
         let inert = resolver.inertOptIns
         if !inert.isEmpty {
             problems.append(
-                "Listed for edits or context but not in llm_opt_in_bundle_ids, so inert — "
+                "Listed for edits or context but with no rewrite pass to use it, so inert — "
                     + inert.joined(separator: ", "))
         }
+        let both = resolver.localOverridesCloud
+        if !both.isEmpty {
+            problems.append(
+                "Listed for both passes; the on-device pass wins — " + both.joined(separator: ", "))
+        }
+        #if !VOICEMODE_LOCAL_PASS
+        if !loaded.localOptInBundleIds.isEmpty {
+            problems.append(
+                "local_opt_in_bundle_ids is set but this build has no on-device pass; rebuild with --local-pass"
+            )
+        }
+        #endif
         configError = problems.isEmpty ? nil : problems.joined(separator: "\n")
         if let configError { log.error("config: \(configError, privacy: .public)") }
     }
 
     func prewarmModel() async {
+        // The on-device model, if any app asks for it, is a multi-GB download —
+        // start it at launch rather than on the first dictation.
+        if !config.localOptInBundleIds.isEmpty {
+            let localModel = config.localModel
+            Task { [localRewriter] in await localRewriter.prewarm(model: localModel) }
+        }
         do {
             try await transcriber.prewarm(model: config.whisperModel)
             modelReady = true
@@ -172,15 +218,17 @@ final class AppState: ObservableObject {
         case .idle, .done, .failed:
             startRecording()
         case .recording:
-            break  // key repeat
+            // Hold: this is key repeat, ignore it. Toggle: this is the stop press.
+            if config.hotkeyMode == .toggle { finishRecording() }
         case .transcribing, .rewriting, .inserting:
-            // Second press while we are working means "never mind".
+            // Another press while we are working means "never mind".
             cancel()
         }
     }
 
     func hotkeyReleased() {
-        guard case .recording = phase else { return }
+        // In toggle mode the release that follows the start press must not stop it.
+        guard config.hotkeyMode == .hold, case .recording = phase else { return }
         finishRecording()
     }
 
@@ -230,9 +278,11 @@ final class AppState: ObservableObject {
                 target, contextCharCap: contextCharCap, fieldCharCap: fieldCharCap)
         }
 
-        // Same idea for the TLS handshake to api.anthropic.com.
-        if policy.llmAllowed {
-            Task { [anthropic] in await anthropic.warmConnection() }
+        // Same idea for whichever pass this app uses.
+        if policy.rewriteAllowed {
+            let target = rewriter(for: policy.destination)
+            let modelName = policy.destination == .local ? config.localModel : config.model
+            Task { await target.prewarm(model: modelName) }
         }
     }
 
@@ -331,7 +381,7 @@ final class AppState: ObservableObject {
         activeIntent = intent
 
         // Denied, or the app never opted in: raw transcript, nothing leaves the machine.
-        guard policy.llmAllowed else {
+        guard policy.rewriteAllowed else {
             phase = .inserting
             // With a selection live, a plain insert replaces it — the same thing
             // typing would do, so it needs no special handling.
@@ -341,7 +391,7 @@ final class AppState: ObservableObject {
                 Dictation(
                     modeName: policy.denied ? "denied (raw)" : "not opted in (raw)",
                     raw: transcript, result: transcript,
-                    contextSent: false, llmUsed: false,
+                    contextSent: false, destination: .none,
                     intent: intent,
                     action: context.hasSelection ? .replaceSelection : .insert,
                     method: method,
@@ -360,18 +410,23 @@ final class AppState: ObservableObject {
             watch.lap("insert-raw")
         }
 
-        phase = .rewriting(contextSent: policy.contextAllowed)
+        activeDestination = policy.destination
+        // The indicator reflects what actually leaves the machine, so an on-device
+        // rewrite never claims to be sending anything.
+        phase = .rewriting(contextSent: policy.contextLeavesMachine)
+        let local = policy.destination == .local
         let decision: EditDecision
         do {
-            decision = try await anthropic.edit(
-                model: mode.model ?? config.model,
-                system: resolver.systemPrompt(for: mode, intent: intent),
+            decision = try await rewriter(for: policy.destination).edit(
+                model: local ? config.localModel : (mode.model ?? config.model),
+                system: resolver.systemPrompt(
+                    for: mode, intent: intent, structuredOutput: !local),
                 user: resolver.userMessage(
                     transcript: transcript, context: context, policy: policy, intent: intent),
                 maxTokens: config.maxTokens,
                 intent: intent
             )
-            watch.lap("llm")
+            watch.lap(local ? "local" : "llm")
         } catch {
             if Task.isCancelled || error is CancellationError { return }
             if let apiError = error as? AnthropicError, apiError == .cancelled { return }
@@ -384,9 +439,9 @@ final class AppState: ObservableObject {
                 watch.lap("insert-fallback")
                 record(
                     Dictation(
-                        modeName: "\(mode.name) (llm failed)",
+                        modeName: "\(mode.name) (\(local ? "on-device" : "API") failed)",
                         raw: transcript, result: transcript,
-                        contextSent: policy.contextAllowed, llmUsed: false,
+                        contextSent: policy.contextLeavesMachine, destination: .none,
                         intent: intent, action: .insert, method: method,
                         timings: watch.summary, context: context,
                         previousFieldValue: context.fieldValue, focusedElement: element))
@@ -419,7 +474,7 @@ final class AppState: ObservableObject {
         finish(
             Dictation(
                 modeName: mode.name, raw: transcript, result: decision.text,
-                contextSent: policy.contextAllowed, llmUsed: true,
+                contextSent: policy.contextLeavesMachine, destination: policy.destination,
                 intent: intent, action: action, method: method,
                 timings: watch.summary, context: context,
                 previousFieldValue: context.fieldValue, focusedElement: element))
@@ -554,9 +609,12 @@ final class AppState: ObservableObject {
                 // Re-runs always compose: the field has moved on since, so the
                 // original draft is no longer a safe thing to rewrite.
                 let policy = resolver.policy(for: dictation.context.bundleId)
-                let decision = try await anthropic.edit(
-                    model: mode.model ?? config.model,
-                    system: resolver.systemPrompt(for: mode, intent: .compose),
+                let local = policy.destination == .local
+                activeDestination = policy.destination
+                let decision = try await rewriter(for: policy.destination).edit(
+                    model: local ? config.localModel : (mode.model ?? config.model),
+                    system: resolver.systemPrompt(
+                        for: mode, intent: .compose, structuredOutput: !local),
                     user: resolver.userMessage(
                         transcript: dictation.raw, context: dictation.context, policy: policy,
                         intent: .compose),
@@ -570,7 +628,7 @@ final class AppState: ObservableObject {
                     Dictation(
                         modeName: "\(mode.name) (re-run)", raw: dictation.raw,
                         result: decision.text,
-                        contextSent: dictation.contextSent, llmUsed: true,
+                        contextSent: dictation.contextSent, destination: policy.destination,
                         intent: .compose, action: .insert, method: method,
                         timings: "re-run", context: dictation.context,
                         previousFieldValue: nil,

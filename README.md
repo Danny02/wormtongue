@@ -34,10 +34,16 @@ talking they're already done. Single process, no daemon, no local server.
 Requires macOS 14+, Apple Silicon, and a Swift 6 toolchain (Xcode 16+).
 
 ```sh
-./Scripts/bundle.sh          # release build → build/VoiceMode.app
-./Scripts/bundle.sh debug    # debug build
+./Scripts/bundle.sh                       # release build → build/VoiceMode.app
+./Scripts/bundle.sh debug                 # debug build
+./Scripts/bundle.sh release --local-pass  # + the on-device rewrite pass
 open build/VoiceMode.app
 ```
+
+`--local-pass` pulls in MLX for on-device rewriting (see below). It is opt-in
+because MLX is a large dependency and its models are multi-GB downloads that most
+apps never need — a default build stays light. It also needs a Swift 6.1+
+toolchain, since `mlx-swift-lm`'s own manifest requires one.
 
 Run the binary directly to watch the pipeline log:
 
@@ -55,7 +61,7 @@ The package is split so most of the logic can be verified without a Mac:
 
 | Target | Contents | Verifiable on Linux |
 |---|---|---|
-| `VoiceModeCore` | Config decoding, mode resolution, privacy policy, prompt assembly, edit-intent resolution, context tail buffer, Anthropic request/response coding | **Yes** — builds and has 93 tests |
+| `VoiceModeCore` | Config decoding, mode resolution, privacy policy, prompt assembly, edit-intent resolution, endpoint parsing, context tail buffer, Anthropic request/response coding | **Yes** — builds and has 114 tests |
 | `VoiceMode` | AppKit, Accessibility, AVFoundation, WhisperKit, SwiftUI | No — needs the macOS SDK |
 
 `Package.swift` declares the macOS target and its dependencies inside
@@ -74,8 +80,9 @@ runs everything that doesn't need a Mac:
 3. `swift-format lint --strict` against `.swift-format`.
 4. Structural rules the split depends on: Core imports nothing but Foundation,
    app files that use Core types import it, the overlay panel never calls
-   `makeKeyAndOrderFront`, and `Info.plist` has the keys without which the app
-   silently misbehaves.
+   `makeKeyAndOrderFront`, MLX is never imported outside its build guard (and a
+   default build doesn't resolve it), and `Info.plist` has the keys without which
+   the app silently misbehaves.
 
 On a Mac, `swift build` is still the only thing that type-checks the app target.
 
@@ -103,7 +110,8 @@ re-add it.
 
 ## Using it
 
-- **Hold** the hotkey, talk, release.
+- **Hold** the hotkey, talk, release. Or set `"hotkey_mode": "toggle"` to press
+  once to start and again to stop.
 - A floating panel appears near the bottom of the screen: a live level meter
   while recording (so you can see the mic is hearing you), then the stage it's
   on, then the inserted text. It's a non-activating panel that ignores mouse
@@ -113,6 +121,34 @@ re-add it.
   edit** appears in the menu.
 - Short system sounds mark start, insert, and failure. Turn them off with
   `"sound_feedback": false`; turn the panel off with `"show_overlay": false`.
+
+## Where the rewrite runs
+
+The LLM pass is raw HTTP: `POST /v1/messages` over `URLSession`, with hand-written
+`Codable` wire types in `VoiceModeCore/AnthropicMessages.swift`. There is no
+official Anthropic SDK for Swift, and the Claude Agent SDK is Python/TypeScript
+only and built for multi-turn tool loops — this needs one stateless completion per
+utterance. The API key comes from the Keychain as `x-api-key`.
+
+**The endpoint is overridable.** Set `api_base_url` to a gateway, a company proxy,
+or a local mock; the wire format is unchanged, and a path prefix is preserved
+(`https://gw.example.com/anthropic` → `…/anthropic/v1/messages`). `api_headers`
+adds request headers for gateways with their own auth — applied *before* the
+built-ins, so the Keychain key can never be overridden from a plaintext file. An
+unusable value falls back to Anthropic's host and says so in the menu.
+
+**Or it runs on this Mac.** Apps in `local_opt_in_bundle_ids` are rewritten by a
+local MLX model instead of the API — §8 of the brief asked whether sensitive apps
+should get that rather than having the pass skipped, and they should. Because
+nothing crosses a boundary, those apps get the field and the window without
+needing any of the opt-in rungs below, and the overlay says "on this Mac" rather
+than claiming to send anything. If an app appears in both lists the local pass
+wins, and that's reported.
+
+The local model has no structured-output mode, so `revise` is asked for JSON in
+prose and parsed with the same tolerant parser the API path uses — which already
+degrades to a plain insert on anything it can't read. That fallback matters more
+here: a small local model is far likelier to answer in prose than in JSON.
 
 ## Editing what's already there
 
@@ -163,6 +199,10 @@ fields loads with defaults for the rest rather than refusing to start.
 | `whisper_model` | WhisperKit model. `base` downloads in seconds and is the right choice while wiring things up; switch to `large-v3-v20240930_turbo` once the pipeline works. |
 | `model` | Rewrite model. Per-mode override via `modes[].model`. |
 | `dictionary` | Proper nouns, ticket prefixes, jargon. Injected into every system prompt. |
+| `api_base_url` | Base URL for the Messages API. Gateway, proxy, or local mock; a path prefix is preserved. Invalid values fall back and are reported. |
+| `api_headers` | Extra request headers for gateways. The Keychain API key always wins. |
+| `local_model`, `local_opt_in_bundle_ids` | On-device rewrite via MLX. Needs a `--local-pass` build. Takes precedence over the cloud pass. |
+| `hotkey_mode` | `hold` (push-to-talk) or `toggle` (press to start, press again to stop). |
 | `llm_opt_in_bundle_ids` | **Apps opt in.** Anything not listed gets the raw transcript inserted and nothing leaves the machine. |
 | `edit_opt_in_bundle_ids` | Middle rung: these apps may have the focused field's own text sent, which is what enables editing an existing draft. Implied by `context_opt_in_bundle_ids`. |
 | `context_opt_in_bundle_ids` | Widest: only these apps have their surrounding on-screen text sent. |
@@ -182,6 +222,8 @@ from `llm_opt_in_bundle_ids` — which would otherwise look like a broken featur
 Audio never leaves the machine. The rewrite pass does send data, and the
 config is built so that opting in is explicit at two levels:
 
+- In `local_opt_in_bundle_ids` → rewritten **on this Mac**. Nothing leaves it, so
+  the field and window are available without any further opt-in.
 - Not in `llm_opt_in_bundle_ids` → raw transcript inserted, **no API call at all**.
 - `llm_opt_in_bundle_ids` only → transcript only. Dictation can only append.
 - `+ edit_opt_in_bundle_ids` → **plus the focused field's own text and selection**,
@@ -231,7 +273,7 @@ What was done to get there:
 
 ```
 Sources/VoiceModeCore/       Foundation only, tested
-  Config, ModeResolver (matching + policy + prompts), FieldContext,
+  Config, APIEndpoint, ModeResolver (matching + policy + prompts), FieldContext,
   EditIntent (what a dictation means, given the field state), TailBuffer,
   Stopwatch, AnthropicMessages (wire types + parsing)
 Sources/VoiceMode/
@@ -240,10 +282,11 @@ Sources/VoiceMode/
   Audio/          AudioRecorder — AVAudioEngine tap → 16 kHz mono Float32
   Transcription/  Transcriber — WhisperKit wrapper, prewarms at launch
   Context/        AXWrapper (batched AXUIElement reads), ContextProbe
-  LLM/            AnthropicClient (transport, warm-up, retry), Keychain
+  LLM/            Rewriter (protocol), AnthropicClient (transport, warm-up,
+                  retry), LocalRewriter (MLX, behind a build flag), Keychain
   Insert/         TextInserter — AX selected-text, falling back to ⌘V
   Support/        Permissions, Hotkey, ConfigStore, Feedback, Log
-Tests/VoiceModeCoreTests/    93 tests
+Tests/VoiceModeCoreTests/    114 tests
 Resources/Info.plist
 Scripts/bundle.sh, Scripts/check.sh
 ```
@@ -274,11 +317,16 @@ Scripts/bundle.sh, Scripts/check.sh
 - **`revise` adds a round trip's worth of tokens and a schema compile.** Structured
   outputs cache the schema for 24 hours, so only the first revision of the day pays
   for it — but a revision is inherently more expensive than an append.
+- **`LocalRewriter` is the least-verified file here.** MLX's Swift API could only
+  be read, not compiled — three call sites to check if a `--local-pass` build
+  fails: `loadModel`, `TokenizersLoader`, `ChatSession`. It's behind the build flag
+  precisely so a wrong guess can't break the default build. Generation length is
+  also uncapped, because `ChatSession.respond`'s parameter surface couldn't be
+  confirmed.
 - **`insert_raw_first` is fragile.** Replacement is `raw.count` synthetic
   backspaces followed by a fresh insert. Any autocomplete, auto-pairing, or
-  input-method interference between the two makes it delete the wrong thing. It
-  also leaves the pasteboard un-restored, because the second paste invalidates
-  the first restore's change-count guard. Off by default.
+  input-method interference between the two makes it delete the wrong thing. Off
+  by default. (The pasteboard is now restored correctly across the two pastes.)
 - **The audio tap takes a lock.** An unfair lock around a `memcpy` is far better
   than the `NSLock` + `Array.append` it replaced, but a lock-free ring buffer is
   the correct answer for a realtime thread.
@@ -290,11 +338,12 @@ Scripts/bundle.sh, Scripts/check.sh
   rejects. Core is checked strictly; a Sendable audit of the app target is
   deferred, not done.
 
-## Assumptions taken from the brief's open questions
+## The brief's open questions (§8)
 
-1. **Which apps matter** — Slack, VS Code/Cursor, and a Jira/Confluence window-title
-   mode are wired as examples in `config.example.json`. Both opt-in lists ship empty.
-2. **Hold, not toggle** — push-to-talk on key-down/key-up.
-3. **Local LLM pass via MLX** — not built. Sensitive apps skip the pass and get the
-   raw transcript. The seam for it is `AppState.runPipeline`, where `policy.llmAllowed`
-   currently decides between "call Anthropic" and "insert raw".
+1. **Which apps matter** — still an assumption: Slack, VS Code/Cursor, and a
+   Jira/Confluence window-title mode are wired as examples in
+   `config.example.json`. Every opt-in list ships empty.
+2. **Hold or toggle** — both, `hotkey_mode` picks. Default `hold`.
+3. **A local LLM pass for sensitive apps** — built, via MLX, behind
+   `--local-pass`. Apps in `local_opt_in_bundle_ids` get a real rewrite on-device
+   instead of having the pass skipped.

@@ -1,6 +1,17 @@
 {
   "model": "claude-haiku-4-5-20251001",
   "max_tokens": 1024,
+
+  "//endpoint": "Base URL for the Messages API. Point at a gateway, a proxy, or a local mock — the wire format is unchanged. Extra headers are for gateways that need their own auth; the Keychain API key always wins over anything set here.",
+  "api_base_url": "https://api.anthropic.com",
+  "api_headers": {},
+
+  "//local": "On-device rewrite pass (§8 of the brief). Only works in a build made with ./Scripts/bundle.sh release --local-pass. Apps listed here are rewritten on this Mac, so nothing leaves it — which is why they need none of the opt-in rungs below. Takes precedence over llm_opt_in_bundle_ids.",
+  "local_model": "mlx-community/Qwen3-4B-4bit",
+  "local_opt_in_bundle_ids": [],
+
+  "//hotkey": "hold = push-to-talk. toggle = press to start, press again to stop.",
+  "hotkey_mode": "hold",
   "whisper_model": "base",
   "context_char_cap": 4000,
   "field_char_cap": 4000,
