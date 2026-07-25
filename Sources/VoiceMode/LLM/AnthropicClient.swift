@@ -5,7 +5,7 @@ import VoiceModeCore
 ///
 /// Wire types and response parsing live in `VoiceModeCore.AnthropicMessages` so
 /// they can be unit-tested; this is the transport.
-actor AnthropicClient: Rewriter {
+actor AnthropicClient {
     private let session: URLSession
     /// Overridable so the app can be pointed at a gateway or a local mock.
     private var endpoint: APIEndpoint = .anthropic
@@ -34,10 +34,6 @@ actor AnthropicClient: Rewriter {
         }
         self.endpoint = endpoint
         self.extraHeaders = headers
-    }
-
-    func prewarm(model: String) async {
-        await warmConnection()
     }
 
     /// Opens the TLS connection ahead of the real request.

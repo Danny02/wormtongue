@@ -6,7 +6,6 @@ import Testing
 private func makeConfig(
     dictionary: [String] = [],
     llm: [String] = [],
-    local: [String] = [],
     edit: [String] = [],
     context: [String] = [],
     denied: [String] = [],
@@ -17,8 +16,6 @@ private func makeConfig(
         maxTokens: 512,
         apiBaseURL: "https://api.anthropic.com",
         apiHeaders: [:],
-        localModel: "local-model",
-        localOptInBundleIds: local,
         whisperModel: "base",
         contextCharCap: 4000,
         fieldCharCap: 4000,
@@ -43,8 +40,7 @@ struct PolicyTests {
         let resolver = ModeResolver(config: makeConfig())
         let policy = resolver.policy(for: "com.tinyspeck.slackmacgap")
         #expect(!policy.denied)
-        #expect(policy.destination == .none)
-        #expect(!policy.rewriteAllowed)
+        #expect(!policy.llmAllowed)
         #expect(!policy.contextAllowed)
     }
 
@@ -52,7 +48,7 @@ struct PolicyTests {
     func llmWithoutContext() {
         let resolver = ModeResolver(config: makeConfig(llm: ["com.microsoft.VSCode"]))
         let policy = resolver.policy(for: "com.microsoft.VSCode")
-        #expect(policy.destination == .cloud)
+        #expect(policy.llmAllowed)
         #expect(!policy.fieldAllowed)
         #expect(!policy.contextAllowed)
     }
@@ -61,7 +57,7 @@ struct PolicyTests {
     func editWithoutContext() {
         let resolver = ModeResolver(config: makeConfig(llm: ["ed"], edit: ["ed"]))
         let policy = resolver.policy(for: "ed")
-        #expect(policy.destination == .cloud)
+        #expect(policy.llmAllowed)
         #expect(policy.fieldAllowed)
         #expect(!policy.contextAllowed)
     }
@@ -90,7 +86,7 @@ struct PolicyTests {
     func contextWithoutLLMIsInert() {
         let resolver = ModeResolver(config: makeConfig(context: ["slack"]))
         let policy = resolver.policy(for: "slack")
-        #expect(policy.destination == .none)
+        #expect(!policy.llmAllowed)
         #expect(!policy.contextAllowed)
     }
 
@@ -101,58 +97,17 @@ struct PolicyTests {
                 llm: ["vault"], edit: ["vault"], context: ["vault"], denied: ["vault"]))
         let policy = resolver.policy(for: "vault")
         #expect(policy.denied)
-        #expect(policy.destination == .none)
+        #expect(!policy.llmAllowed)
         #expect(!policy.fieldAllowed)
         #expect(!policy.contextAllowed)
     }
 
-    @Test("The local pass runs on-device and needs no opt-in to see the field")
-    func localPassNeedsNoOptIn() {
-        let resolver = ModeResolver(config: makeConfig(local: ["com.apple.mail"]))
-        let policy = resolver.policy(for: "com.apple.mail")
-        #expect(policy.destination == .local)
-        #expect(policy.rewriteAllowed)
-        // Nothing crosses a boundary, so the field and window are simply available.
-        #expect(policy.fieldAllowed)
-        #expect(policy.contextAllowed)
-        // ...and the indicator must not claim anything was sent.
-        #expect(!policy.contextLeavesMachine)
-    }
-
-    @Test("A hard deny beats the local pass too")
-    func denyBeatsLocal() {
-        let resolver = ModeResolver(config: makeConfig(local: ["vault"], denied: ["vault"]))
-        let policy = resolver.policy(for: "vault")
-        #expect(policy.denied)
-        #expect(policy.destination == .none)
-        #expect(!policy.fieldAllowed)
-    }
-
-    @Test("Listed for both passes: the local one wins, and it is reported")
-    func localBeatsCloud() {
-        let resolver = ModeResolver(config: makeConfig(llm: ["both"], local: ["both"]))
-        #expect(resolver.policy(for: "both").destination == .local)
-        #expect(resolver.localOverridesCloud == ["both"])
-    }
-
-    @Test("The cloud pass is the only one that sends context off the machine")
-    func onlyCloudSends() {
-        let resolver = ModeResolver(config: makeConfig(llm: ["c"], context: ["c"]))
-        #expect(resolver.policy(for: "c").contextLeavesMachine)
-    }
-
-    @Test("An opt-in on a wider rung with no rewrite pass at all is reported as inert")
+    @Test("An opt-in on a wider rung without the LLM rung is reported as inert")
     func inertOptInsReported() {
         let resolver = ModeResolver(
             config: makeConfig(llm: ["a"], edit: ["a", "b"], context: ["c"]))
         // "a" is fine; "b" and "c" can never take effect.
         #expect(resolver.inertOptIns == ["b", "c"])
-    }
-
-    @Test("A wider rung satisfied by the local pass is not inert")
-    func localSatisfiesWiderRungs() {
-        let resolver = ModeResolver(config: makeConfig(local: ["a"], edit: ["a"]))
-        #expect(resolver.inertOptIns.isEmpty)
     }
 
     @Test("A correctly laddered config reports nothing inert")
@@ -167,7 +122,7 @@ struct PolicyTests {
         let resolver = ModeResolver(config: makeConfig(llm: ["slack"]))
         let policy = resolver.policy(for: nil)
         #expect(!policy.denied)
-        #expect(policy.destination == .none)
+        #expect(!policy.llmAllowed)
     }
 }
 
@@ -243,9 +198,9 @@ struct ModeMatchingTests {
 @Suite("Prompt assembly")
 struct PromptTests {
     private let everythingAllowed = Policy(
-        denied: false, destination: .cloud, fieldAllowed: true, contextAllowed: true)
+        denied: false, llmAllowed: true, fieldAllowed: true, contextAllowed: true)
     private let fieldOnly = Policy(
-        denied: false, destination: .cloud, fieldAllowed: true, contextAllowed: false)
+        denied: false, llmAllowed: true, fieldAllowed: true, contextAllowed: false)
 
     @Test("The dictionary block is appended to every system prompt")
     func dictionaryBlock() {
@@ -275,7 +230,7 @@ struct PromptTests {
         let message = resolver.userMessage(
             transcript: "hello", context: context,
             policy: Policy(
-                denied: false, destination: .cloud, fieldAllowed: false, contextAllowed: false))
+                denied: false, llmAllowed: true, fieldAllowed: false, contextAllowed: false))
 
         #expect(message.contains("<transcript>"))
         #expect(message.contains("hello"))
@@ -348,7 +303,7 @@ struct PromptTests {
         let resolver = ModeResolver(config: makeConfig())
         let context = FieldContext(fieldValue: "my half-typed draft", selectionLocation: 19)
         let policy = Policy(
-            denied: false, destination: .cloud, fieldAllowed: false, contextAllowed: false)
+            denied: false, llmAllowed: true, fieldAllowed: false, contextAllowed: false)
 
         let message = resolver.userMessage(
             transcript: "hello", context: context, policy: policy, intent: .compose)
@@ -395,26 +350,6 @@ struct PromptTests {
             transcript: "tidy this up", context: context, policy: fieldOnly, intent: .revise)
 
         #expect(message.contains("cannot be rewritten as a whole"))
-    }
-
-    @Test("A destination without schema enforcement is asked for JSON in prose")
-    func jsonAskedForWhenUnenforced() {
-        // The API enforces the schema, so the prompt stays clean.
-        let enforced = ModeResolver.editingBlock(for: .revise, structuredOutput: true)
-        #expect(!enforced.contains("<output_format>"))
-
-        // A local model cannot be constrained, so the shape has to be described.
-        let unenforced = ModeResolver.editingBlock(for: .revise, structuredOutput: false)
-        #expect(unenforced.contains("<output_format>"))
-        #expect(unenforced.contains(#"{"action": "insert", "text": "..."}"#))
-
-        // Only the ambiguous intent needs a decision, so only it needs the format.
-        #expect(
-            !ModeResolver.editingBlock(for: .compose, structuredOutput: false)
-                .contains("<output_format>"))
-        #expect(
-            !ModeResolver.editingBlock(for: .replaceSelection, structuredOutput: false)
-                .contains("<output_format>"))
     }
 
     @Test("Each intent gets its own mechanics, and only revise asks for a decision")

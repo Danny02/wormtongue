@@ -69,17 +69,6 @@ public struct Config: Codable, Sendable, Equatable {
     /// stays in the Keychain and cannot be overridden from a plaintext file.
     public var apiHeaders: [String: String]
 
-    // MARK: Local pass
-
-    /// Hugging Face id of an MLX model for the on-device rewrite pass. Only
-    /// meaningful in a build made with the local pass enabled.
-    public var localModel: String
-    /// Apps whose rewrite runs **on this Mac** instead of hitting the API. Answers
-    /// §8 of the brief: sensitive apps get a real rewrite rather than the pass being
-    /// skipped. Nothing leaves the machine, so these apps get field and window
-    /// context without needing the opt-in rungs below.
-    public var localOptInBundleIds: [String]
-
     // MARK: Transcription
 
     /// WhisperKit model name. Start with "base" — it downloads in seconds.
@@ -97,7 +86,7 @@ public struct Config: Codable, Sendable, Equatable {
     /// Proper nouns, ticket prefixes, internal jargon. Injected into every
     /// system prompt — the cheap substitute for fine-tuning.
     public var dictionary: [String]
-    /// Denylist is on by default: apps opt IN to the cloud rewrite pass. Anything
+    /// Denylist is on by default: apps opt IN to the rewrite pass. Anything
     /// not listed here gets the raw transcript inserted, nothing leaves the machine.
     public var llmOptInBundleIds: [String]
     /// Apps allowed to have the *focused field's own* content sent. This is what
@@ -107,8 +96,7 @@ public struct Config: Codable, Sendable, Equatable {
     public var editOptInBundleIds: [String]
     /// Widest rung: apps allowed to have their surrounding on-screen text sent.
     public var contextOptInBundleIds: [String]
-    /// Hard denies. Never transcribe, never probe, never send, never rewrite — not
-    /// even locally. Wins over everything.
+    /// Hard denies. Never transcribe, never probe, never send. Wins over everything.
     public var deniedBundleIds: [String]
 
     // MARK: Behaviour
@@ -128,8 +116,6 @@ public struct Config: Codable, Sendable, Equatable {
         maxTokens: 1024,
         apiBaseURL: "https://api.anthropic.com",
         apiHeaders: [:],
-        localModel: "mlx-community/Qwen3-4B-4bit",
-        localOptInBundleIds: [],
         whisperModel: "base",
         contextCharCap: 4000,
         fieldCharCap: 4000,
@@ -163,8 +149,6 @@ public struct Config: Codable, Sendable, Equatable {
         case maxTokens = "max_tokens"
         case apiBaseURL = "api_base_url"
         case apiHeaders = "api_headers"
-        case localModel = "local_model"
-        case localOptInBundleIds = "local_opt_in_bundle_ids"
         case whisperModel = "whisper_model"
         case contextCharCap = "context_char_cap"
         case fieldCharCap = "field_char_cap"
@@ -186,10 +170,6 @@ public struct Config: Codable, Sendable, Equatable {
         apiBaseURL = try c.decodeIfPresent(String.self, forKey: .apiBaseURL) ?? d.apiBaseURL
         apiHeaders =
             try c.decodeIfPresent([String: String].self, forKey: .apiHeaders) ?? d.apiHeaders
-        localModel = try c.decodeIfPresent(String.self, forKey: .localModel) ?? d.localModel
-        localOptInBundleIds =
-            try c.decodeIfPresent([String].self, forKey: .localOptInBundleIds)
-            ?? d.localOptInBundleIds
         whisperModel = try c.decodeIfPresent(String.self, forKey: .whisperModel) ?? d.whisperModel
         contextCharCap =
             try c.decodeIfPresent(Int.self, forKey: .contextCharCap) ?? d.contextCharCap
@@ -221,8 +201,6 @@ public struct Config: Codable, Sendable, Equatable {
         maxTokens: Int,
         apiBaseURL: String,
         apiHeaders: [String: String],
-        localModel: String,
-        localOptInBundleIds: [String],
         whisperModel: String,
         contextCharCap: Int,
         fieldCharCap: Int,
@@ -241,8 +219,6 @@ public struct Config: Codable, Sendable, Equatable {
         self.maxTokens = maxTokens
         self.apiBaseURL = apiBaseURL
         self.apiHeaders = apiHeaders
-        self.localModel = localModel
-        self.localOptInBundleIds = localOptInBundleIds
         self.whisperModel = whisperModel
         self.contextCharCap = contextCharCap
         self.fieldCharCap = fieldCharCap
@@ -282,8 +258,6 @@ extension Config {
         maxTokens: 1024,
         apiBaseURL: "https://api.anthropic.com",
         apiHeaders: [:],
-        localModel: "mlx-community/Qwen3-4B-4bit",
-        localOptInBundleIds: [],
         whisperModel: "base",
         contextCharCap: 4000,
         fieldCharCap: 4000,

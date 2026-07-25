@@ -51,11 +51,8 @@ struct OverlayView: View {
                 .foregroundStyle(.primary)
                 .font(.system(size: 15, weight: .semibold))
         case let .rewriting(contextSent):
-            Image(systemName: rewriteSymbol(contextSent: contextSent))
-                .foregroundStyle(
-                    state.activeDestination == .local
-                        ? .green : (contextSent ? .orange : .accentColor)
-                )
+            Image(systemName: contextSent ? "paperplane.fill" : "wand.and.stars")
+                .foregroundStyle(contextSent ? .orange : .accentColor)
                 .font(.system(size: 15, weight: .semibold))
         case .inserting, .done:
             Image(systemName: "checkmark.circle.fill")
@@ -82,11 +79,6 @@ struct OverlayView: View {
         case .done, .failed, .idle:
             EmptyView()
         }
-    }
-
-    private func rewriteSymbol(contextSent: Bool) -> String {
-        if state.activeDestination == .local { return "cpu" }
-        return contextSent ? "paperplane.fill" : "wand.and.stars"
     }
 
     private var title: String {
@@ -117,10 +109,6 @@ struct OverlayView: View {
         case let .rewriting(contextSent):
             // Say out loud what is being changed, and when the window's text is
             // leaving the machine.
-            // On-device: nothing is sent, so say that rather than naming a scope.
-            guard state.activeDestination == .cloud else {
-                return "\(state.activeIntent.label) · on this Mac"
-            }
             let scope = contextSent ? "sending screen context" : "transcript only"
             return "\(state.activeIntent.label) · \(scope)"
         case .inserting:

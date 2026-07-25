@@ -47,7 +47,7 @@ fi
 step "Core stays platform-free"
 # If Core ever imports a macOS framework, it stops building on Linux and the
 # tests stop running — which is the whole point of the split.
-if banned=$(grep -rlE '^import (AppKit|SwiftUI|ApplicationServices|AVFoundation|Carbon|IOKit|WhisperKit|KeyboardShortcuts|MLX[A-Za-z]*|os)$' Sources/VoiceModeCore 2>/dev/null); then
+if banned=$(grep -rlE '^import (AppKit|SwiftUI|ApplicationServices|AVFoundation|Carbon|IOKit|WhisperKit|KeyboardShortcuts|os)$' Sources/VoiceModeCore 2>/dev/null); then
 	fail "Core imports a platform framework:"
 	echo "$banned"
 else
@@ -78,22 +78,6 @@ if grep -q 'nonactivatingPanel' Sources/VoiceMode/App/Overlay/OverlayController.
 	ok "overlay panel is non-activating"
 else
 	fail "overlay panel is missing .nonactivatingPanel"
-fi
-
-step "Local pass stays behind its build flag"
-# An unguarded MLX import would drag the dependency into every build.
-if unguarded=$(grep -rl '^import MLX' Sources/VoiceMode --include='*.swift' | while read -r f; do
-	grep -q 'VOICEMODE_LOCAL_PASS' "$f" || echo "$f"
-done) && [ -n "$unguarded" ]; then
-	fail "MLX imported without a VOICEMODE_LOCAL_PASS guard:"
-	echo "$unguarded"
-else
-	ok "MLX imports are guarded"
-fi
-if swift build 2>&1 | grep -qi 'mlx'; then
-	fail "a default build resolves MLX; it must be opt-in"
-else
-	ok "default build does not pull MLX"
 fi
 
 step "Info.plist"

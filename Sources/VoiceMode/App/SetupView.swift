@@ -81,14 +81,6 @@ struct SetupView: View {
                             state.activeEndpoint.base.absoluteString
                                 + (state.activeEndpoint.isDefault ? "" : "  (overridden)"))
                         labelled("Hotkey mode", state.config.hotkeyMode.rawValue)
-                        labelled(
-                            "On-device rewrite",
-                            state.localPassAvailable
-                                ? (state.config.localOptInBundleIds.isEmpty
-                                    ? "built in, no apps opted in"
-                                    : "\(state.config.localModel) for "
-                                        + state.config.localOptInBundleIds.joined(separator: ", "))
-                                : "not in this build (rebuild with --local-pass)")
                         labelled("Modes", state.config.modes.map(\.name).joined(separator: ", "))
                         labelled(
                             "LLM pass allowed for",

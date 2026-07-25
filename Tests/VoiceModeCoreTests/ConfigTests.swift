@@ -95,8 +95,6 @@ struct ConfigTests {
         config.maxTokens = 4321
         config.apiBaseURL = "https://gw.example.com/anthropic"
         config.apiHeaders = ["x-gw": "token"]
-        config.localModel = "mlx-community/other"
-        config.localOptInBundleIds = ["local.app"]
         config.whisperModel = "tiny"
         config.contextCharCap = 111
         config.fieldCharCap = 222
