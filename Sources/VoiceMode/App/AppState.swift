@@ -13,13 +13,19 @@ struct Dictation: Identifiable {
     var result: String
     var contextSent: Bool
     var llmUsed: Bool
+    var intent: EditIntent
+    var action: InsertionAction
     var method: InsertionMethod
     var timings: String
     var context: FieldContext
+    /// The field's contents before a destructive action, so it can be put back.
+    var previousFieldValue: String?
     /// Held so "re-insert" and "re-run" can target the same field.
     var focusedElement: AXUIElement?
 
     var appName: String? { context.appName }
+    /// Revertable when we overwrote something and know what it was.
+    var canRevert: Bool { action.isDestructive && previousFieldValue != nil }
 }
 
 @MainActor
@@ -50,6 +56,9 @@ final class AppState: ObservableObject {
     @Published private(set) var targetAppName: String?
     @Published private(set) var activeModeName: String?
     @Published private(set) var lastResultPreview: String?
+    @Published private(set) var activeIntent: EditIntent = .compose
+    /// Drives the "Revert last edit" affordance.
+    @Published private(set) var revertable: Dictation?
     @Published private(set) var config: Config = .fallback
 
     private let recorder = AudioRecorder()
@@ -136,6 +145,12 @@ final class AppState: ObservableObject {
         if !badPatterns.isEmpty {
             problems.append("Unusable window title regex — \(badPatterns.joined(separator: "; "))")
         }
+        let inert = resolver.inertOptIns
+        if !inert.isEmpty {
+            problems.append(
+                "Listed for edits or context but not in llm_opt_in_bundle_ids, so inert — "
+                    + inert.joined(separator: ", "))
+        }
         configError = problems.isEmpty ? nil : problems.joined(separator: "\n")
         if let configError { log.error("config: \(configError, privacy: .public)") }
     }
@@ -197,6 +212,7 @@ final class AppState: ObservableObject {
         inputLevel = 0
         lastResultPreview = nil
         activeModeName = nil
+        activeIntent = .compose
         showOverlayIfEnabled()
         Feedback.recordingStarted()
         startLevelPolling()
@@ -206,10 +222,12 @@ final class AppState: ObservableObject {
         // The AX traversal is IPC-bound and takes 100–700ms. Starting it here
         // rather than on release takes it off the critical path entirely: focus
         // cannot change while the user is holding the key.
-        let charCap = config.contextCharCap
+        let contextCharCap = config.contextCharCap
+        let fieldCharCap = config.fieldCharCap
         probeTask = Task { [contextProbe] in
             guard !policy.denied else { return nil }
-            return await contextProbe.probe(target, charCap: charCap)
+            return await contextProbe.probe(
+                target, contextCharCap: contextCharCap, fieldCharCap: fieldCharCap)
         }
 
         // Same idea for the TLS handshake to api.anthropic.com.
@@ -308,24 +326,34 @@ final class AppState: ObservableObject {
         let mode = resolver.mode(bundleId: target.bundleId, windowTitle: context.windowTitle)
         activeModeName = mode.name
 
+        // What the dictation is *for*, given what is already in the field.
+        let intent = EditIntent.resolve(context: context, fieldAllowed: policy.fieldAllowed)
+        activeIntent = intent
+
         // Denied, or the app never opted in: raw transcript, nothing leaves the machine.
         guard policy.llmAllowed else {
             phase = .inserting
+            // With a selection live, a plain insert replaces it — the same thing
+            // typing would do, so it needs no special handling.
             let method = inserter.insert(transcript, into: element)
             watch.lap("insert")
             finish(
                 Dictation(
                     modeName: policy.denied ? "denied (raw)" : "not opted in (raw)",
                     raw: transcript, result: transcript,
-                    contextSent: false, llmUsed: false, method: method,
-                    timings: watch.summary, context: context, focusedElement: element))
+                    contextSent: false, llmUsed: false,
+                    intent: intent,
+                    action: context.hasSelection ? .replaceSelection : .insert,
+                    method: method,
+                    timings: watch.summary, context: context,
+                    previousFieldValue: context.fieldValue, focusedElement: element))
             return
         }
 
         // Optional mitigation from §7: get something on screen immediately, then
         // replace it when the LLM returns.
         var rawInserted = 0
-        if config.insertRawFirst {
+        if config.insertRawFirst && intent == .compose {
             phase = .inserting
             _ = inserter.insert(transcript, into: element)
             rawInserted = transcript.count
@@ -333,15 +361,15 @@ final class AppState: ObservableObject {
         }
 
         phase = .rewriting(contextSent: policy.contextAllowed)
-        let rewritten: String
+        let decision: EditDecision
         do {
-            rewritten = try await anthropic.rewrite(
+            decision = try await anthropic.edit(
                 model: mode.model ?? config.model,
-                system: resolver.systemPrompt(for: mode),
+                system: resolver.systemPrompt(for: mode, intent: intent),
                 user: resolver.userMessage(
-                    transcript: transcript, context: context,
-                    contextAllowed: policy.contextAllowed),
-                maxTokens: config.maxTokens
+                    transcript: transcript, context: context, policy: policy, intent: intent),
+                maxTokens: config.maxTokens,
+                intent: intent
             )
             watch.lap("llm")
         } catch {
@@ -358,8 +386,10 @@ final class AppState: ObservableObject {
                     Dictation(
                         modeName: "\(mode.name) (llm failed)",
                         raw: transcript, result: transcript,
-                        contextSent: policy.contextAllowed, llmUsed: false, method: method,
-                        timings: watch.summary, context: context, focusedElement: element))
+                        contextSent: policy.contextAllowed, llmUsed: false,
+                        intent: intent, action: .insert, method: method,
+                        timings: watch.summary, context: context,
+                        previousFieldValue: context.fieldValue, focusedElement: element))
             }
             fail(error.localizedDescription)
             return
@@ -367,17 +397,49 @@ final class AppState: ObservableObject {
 
         guard !Task.isCancelled else { return }
         phase = .inserting
-        let method =
-            rawInserted > 0
-            ? inserter.replaceTrailing(characterCount: rawInserted, with: rewritten, into: element)
-            : inserter.insert(rewritten, into: element)
+
+        let action = apply(intent: intent, decision: decision)
+        let method: InsertionMethod
+        switch action {
+        case .replaceAll:
+            method = inserter.replaceAll(with: decision.text, in: element)
+        case .replaceSelection:
+            // Paste and AX both replace a live selection, so the ordinary insert
+            // path already does the right thing here.
+            method = inserter.insert(decision.text, into: element)
+        case .insert:
+            method =
+                rawInserted > 0
+                ? inserter.replaceTrailing(
+                    characterCount: rawInserted, with: decision.text, into: element)
+                : inserter.insert(decision.text, into: element)
+        }
         watch.lap("insert")
 
         finish(
             Dictation(
-                modeName: mode.name, raw: transcript, result: rewritten,
-                contextSent: policy.contextAllowed, llmUsed: true, method: method,
-                timings: watch.summary, context: context, focusedElement: element))
+                modeName: mode.name, raw: transcript, result: decision.text,
+                contextSent: policy.contextAllowed, llmUsed: true,
+                intent: intent, action: action, method: method,
+                timings: watch.summary, context: context,
+                previousFieldValue: context.fieldValue, focusedElement: element))
+    }
+
+    /// Reconciles what the model asked for with what the field state permits.
+    ///
+    /// The model only ever proposes `insert` or `replace_all`, and `replace_all` is
+    /// refused unless we actually hold the field's full previous contents — without
+    /// them the edit could not be undone.
+    private func apply(intent: EditIntent, decision: EditDecision) -> InsertionAction {
+        switch intent {
+        case .compose:
+            return .insert
+        case .replaceSelection:
+            return .replaceSelection
+        case .revise:
+            guard decision.action == .replaceAll else { return .insert }
+            return .replaceAll
+        }
     }
 
     /// Appends to history and logs. Says nothing about whether the dictation
@@ -386,6 +448,8 @@ final class AppState: ObservableObject {
         history.insert(dictation, at: 0)
         if history.count > historyLimit { history.removeLast(history.count - historyLimit) }
         lastResultPreview = dictation.result
+        // Only offer to undo something we can actually put back.
+        revertable = dictation.canRevert && dictation.method != .aborted ? dictation : nil
         log.info(
             """
             \(dictation.modeName, privacy: .public) via \(dictation.method.rawValue, privacy: .public) \
@@ -449,6 +513,33 @@ final class AppState: ObservableObject {
 
     // MARK: - History actions (M4)
 
+    /// Puts back what a whole-field rewrite or selection replacement overwrote.
+    ///
+    /// A voice command that silently destroys a draft is not acceptable, so every
+    /// destructive action captures the field's previous contents first and this
+    /// restores them wholesale — which works for both kinds of overwrite.
+    func revert(_ dictation: Dictation) {
+        guard let previous = dictation.previousFieldValue else { return }
+        let method = inserter.replaceAll(with: previous, in: dictation.focusedElement)
+        log.notice(
+            "reverted \(dictation.action.rawValue, privacy: .public) via \(method.rawValue, privacy: .public)"
+        )
+        revertable = nil
+        if method == .aborted {
+            fail("Could not revert — a secure field took focus.")
+        } else {
+            phase = .done
+            lastResultPreview = "Reverted"
+            Feedback.inserted()
+            showOverlayIfEnabled()
+            overlay.hide(after: 1.4)
+        }
+    }
+
+    func revertLast() {
+        if let revertable { revert(revertable) }
+    }
+
     func reinsert(_ dictation: Dictation) {
         _ = inserter.insert(dictation.result, into: dictation.focusedElement)
     }
@@ -460,22 +551,29 @@ final class AppState: ObservableObject {
             phase = .rewriting(contextSent: dictation.contextSent)
             showOverlayIfEnabled()
             do {
-                let text = try await anthropic.rewrite(
+                // Re-runs always compose: the field has moved on since, so the
+                // original draft is no longer a safe thing to rewrite.
+                let policy = resolver.policy(for: dictation.context.bundleId)
+                let decision = try await anthropic.edit(
                     model: mode.model ?? config.model,
-                    system: resolver.systemPrompt(for: mode),
+                    system: resolver.systemPrompt(for: mode, intent: .compose),
                     user: resolver.userMessage(
-                        transcript: dictation.raw, context: dictation.context,
-                        contextAllowed: dictation.contextSent),
-                    maxTokens: config.maxTokens
+                        transcript: dictation.raw, context: dictation.context, policy: policy,
+                        intent: .compose),
+                    maxTokens: config.maxTokens,
+                    intent: .compose
                 )
                 guard !Task.isCancelled else { return }
                 phase = .inserting
-                let method = inserter.insert(text, into: dictation.focusedElement)
+                let method = inserter.insert(decision.text, into: dictation.focusedElement)
                 finish(
                     Dictation(
-                        modeName: "\(mode.name) (re-run)", raw: dictation.raw, result: text,
-                        contextSent: dictation.contextSent, llmUsed: true, method: method,
+                        modeName: "\(mode.name) (re-run)", raw: dictation.raw,
+                        result: decision.text,
+                        contextSent: dictation.contextSent, llmUsed: true,
+                        intent: .compose, action: .insert, method: method,
                         timings: "re-run", context: dictation.context,
+                        previousFieldValue: nil,
                         focusedElement: dictation.focusedElement))
             } catch {
                 guard !Task.isCancelled else { return }

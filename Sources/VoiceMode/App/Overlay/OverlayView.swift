@@ -1,4 +1,5 @@
 import SwiftUI
+import VoiceModeCore
 
 struct OverlayView: View {
     @EnvironmentObject private var state: AppState
@@ -85,10 +86,14 @@ struct OverlayView: View {
         case .idle: return ""
         case .recording: return "Listening…"
         case .transcribing: return "Transcribing"
-        case let .rewriting(contextSent):
-            return contextSent ? "Rewriting with context" : "Rewriting"
+        case .rewriting:
+            switch state.activeIntent {
+            case .compose: return "Rewriting"
+            case .replaceSelection: return "Replacing selection"
+            case .revise: return "Revising draft"
+            }
         case .inserting: return "Inserting"
-        case .done: return "Inserted"
+        case .done: return state.revertable != nil ? "Field rewritten" : "Inserted"
         case .failed: return "Dictation failed"
         }
     }
@@ -102,13 +107,17 @@ struct OverlayView: View {
         case .transcribing:
             return "on this Mac"
         case let .rewriting(contextSent):
-            // Say out loud when the window's text is leaving the machine.
-            return contextSent
-                ? "\(state.activeModeName ?? "mode") · sending screen context"
-                : "\(state.activeModeName ?? "mode") · transcript only"
+            // Say out loud what is being changed, and when the window's text is
+            // leaving the machine.
+            let scope = contextSent ? "sending screen context" : "transcript only"
+            return "\(state.activeIntent.label) · \(scope)"
         case .inserting:
             return state.activeModeName
         case .done:
+            // A rewrite overwrote something, so say how to get it back.
+            if state.revertable != nil {
+                return "Revert from the menu bar · \(state.lastResultPreview ?? "")"
+            }
             return state.lastResultPreview
         case .failed:
             return state.failureMessage

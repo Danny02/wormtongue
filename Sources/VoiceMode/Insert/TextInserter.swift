@@ -4,7 +4,9 @@ import Carbon.HIToolbox
 
 enum InsertionMethod: String {
     case axSelectedText = "AX"
+    case axValue = "AX-value"
     case paste = "paste"
+    case selectAllPaste = "select-all+paste"
     case aborted = "aborted"
 }
 
@@ -29,6 +31,48 @@ final class TextInserter {
         if let element, tryAX(text, element) { return .axSelectedText }
         paste(text)
         return .paste
+    }
+
+    /// Replaces the field's entire contents.
+    ///
+    /// Only reached when the model decided the dictation was an instruction about
+    /// the existing draft. Three ways down, cheapest and safest first:
+    ///   1. Set `kAXValueAttribute`. For whole-field replacement, clobbering the
+    ///      value is exactly what we want, so the usual objection to it does not
+    ///      apply — but it is verified by reading back, because Electron and web
+    ///      views accept the write and ignore it.
+    ///   2. Select the whole range via AX, then write the selection.
+    ///   3. ⌘A then paste. Works nearly everywhere; the risk is an app where ⌘A
+    ///      is not "select all in this field".
+    func replaceAll(with text: String, in element: AXUIElement?) -> InsertionMethod {
+        guard !text.isEmpty else { return .aborted }
+        if Permissions.secureInputEnabled {
+            log.notice("whole-field replacement aborted: secure input is enabled")
+            return .aborted
+        }
+
+        if let element {
+            let valueAttribute = kAXValueAttribute as String
+            if AX.isSettable(element, valueAttribute),
+                AX.set(element, valueAttribute, text as CFString),
+                AX.string(element, valueAttribute) == text
+            {
+                return .axValue
+            }
+            // Select everything, then replace the selection.
+            if let current = AX.string(element, valueAttribute),
+                let whole = AX.makeRange(location: 0, length: current.utf16.count),
+                AX.isSettable(element, kAXSelectedTextRangeAttribute as String),
+                AX.set(element, kAXSelectedTextRangeAttribute as String, whole),
+                tryAX(text, element)
+            {
+                return .axSelectedText
+            }
+        }
+
+        tap(keyCode: CGKeyCode(kVK_ANSI_A), flags: .maskCommand)
+        paste(text)
+        return .selectAllPaste
     }
 
     /// Replaces `characterCount` characters before the caret with `text`.

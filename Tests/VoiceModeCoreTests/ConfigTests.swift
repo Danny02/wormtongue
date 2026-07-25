@@ -15,6 +15,7 @@ struct ConfigTests {
         #expect(config.model == Config.fallback.model)
         #expect(config.maxTokens == Config.fallback.maxTokens)
         #expect(config.contextCharCap == Config.fallback.contextCharCap)
+        #expect(config.fieldCharCap == Config.fallback.fieldCharCap)
         #expect(config.showOverlay)
         #expect(config.soundFeedback)
         #expect(config.modes.count == 1)
@@ -26,7 +27,9 @@ struct ConfigTests {
             {
               "max_tokens": 42,
               "context_char_cap": 99,
+              "field_char_cap": 55,
               "llm_opt_in_bundle_ids": ["a"],
+              "edit_opt_in_bundle_ids": ["e"],
               "context_opt_in_bundle_ids": ["b"],
               "denied_bundle_ids": ["c"],
               "insert_raw_first": true,
@@ -38,7 +41,9 @@ struct ConfigTests {
 
         #expect(config.maxTokens == 42)
         #expect(config.contextCharCap == 99)
+        #expect(config.fieldCharCap == 55)
         #expect(config.llmOptInBundleIds == ["a"])
+        #expect(config.editOptInBundleIds == ["e"])
         #expect(config.contextOptInBundleIds == ["b"])
         #expect(config.deniedBundleIds == ["c"])
         #expect(config.insertRawFirst)
@@ -97,7 +102,13 @@ struct ConfigTests {
         #expect(config.contextOptInBundleIds == ["com.tinyspeck.slackmacgap"])
         #expect(config.llmOptInBundleIds.contains("com.microsoft.VSCode"))
         #expect(!config.contextOptInBundleIds.contains("com.microsoft.VSCode"))
+        // VS Code may edit its own field without the whole window being sent.
+        #expect(config.editOptInBundleIds.contains("com.microsoft.VSCode"))
+        let resolver = ModeResolver(config: config)
+        let code = resolver.policy(for: "com.microsoft.VSCode")
+        #expect(code.fieldAllowed)
+        #expect(!code.contextAllowed)
         // Every regex in the example must actually compile.
-        #expect(ModeResolver(config: config).invalidTitlePatterns.isEmpty)
+        #expect(resolver.invalidTitlePatterns.isEmpty)
     }
 }

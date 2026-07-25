@@ -41,23 +41,40 @@ actor AnthropicClient {
         _ = try? await session.data(for: request)
     }
 
-    func rewrite(model: String, system: String, user: String, maxTokens: Int) async throws -> String
-    {
+    /// Rewrites the utterance and says what to do with the result.
+    ///
+    /// `.compose` and `.replaceSelection` are deterministic, so they ask for plain
+    /// text. Only `.revise` — a draft with no selection — needs the model to choose
+    /// between adding and rewriting, and only that shape pays for structured output.
+    func edit(
+        model: String, system: String, user: String, maxTokens: Int, intent: EditIntent
+    ) async throws -> EditDecision {
+        let structured = intent.needsDecision
         let body = try AnthropicMessages.Request(
-            model: model, system: system, user: user, maxTokens: maxTokens
+            model: model, system: system, user: user, maxTokens: maxTokens,
+            structured: structured
         ).encoded()
 
+        let data: Data
+        let status: Int
         do {
-            return try await send(body)
+            (status, data) = try await send(body)
         } catch let error as AnthropicError where error.isRetryable {
             // A 429 or 5xx is worth exactly one more shot; anything else is our bug.
             log.notice("retrying after \(error.localizedDescription, privacy: .public)")
             try await Task.sleep(for: .milliseconds(250))
-            return try await send(body)
+            (status, data) = try await send(body)
         }
+
+        guard structured else {
+            let text = try AnthropicMessages.text(fromStatus: status, body: data)
+            return EditDecision(
+                action: intent == .replaceSelection ? .replaceSelection : .insert, text: text)
+        }
+        return try AnthropicMessages.decision(fromStatus: status, body: data)
     }
 
-    private func send(_ body: Data) async throws -> String {
+    private func send(_ body: Data) async throws -> (status: Int, data: Data) {
         guard let apiKey = Keychain.apiKey() else { throw AnthropicError.missingAPIKey }
 
         var request = URLRequest(url: AnthropicMessages.endpoint)
@@ -79,6 +96,11 @@ actor AnthropicClient {
 
         lastWarmed = ContinuousClock.now  // the connection is demonstrably warm now
         let status = (response as? HTTPURLResponse)?.statusCode ?? 0
-        return try AnthropicMessages.text(fromStatus: status, body: data)
+        // Retry classification needs the typed error, so surface HTTP failures here
+        // and leave body interpretation to the caller.
+        if !(200..<300).contains(status) {
+            _ = try AnthropicMessages.text(fromStatus: status, body: data)
+        }
+        return (status, data)
     }
 }

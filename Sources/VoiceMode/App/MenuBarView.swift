@@ -24,9 +24,13 @@ struct MenuBarView: View {
         Divider()
 
         if let last = state.history.first {
-            Text("Last: \(last.modeName)\(last.contextSent ? " · context sent" : "")")
+            Text("Last: \(last.modeName) · \(last.action.label)")
             Text(last.timings)
             Button("Re-insert last") { state.reinsert(last) }
+        }
+        if let revertable = state.revertable {
+            Button("Revert last edit (\(revertable.action.label))") { state.revert(revertable) }
+                .keyboardShortcut("z")
         }
 
         Divider()

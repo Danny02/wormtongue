@@ -83,6 +83,11 @@ struct SetupView: View {
                                 ? "nothing yet — every app gets the raw transcript"
                                 : state.config.llmOptInBundleIds.joined(separator: ", "))
                         labelled(
+                            "Field edits allowed for",
+                            state.config.editOptInBundleIds.isEmpty
+                                ? "nothing — dictation only ever appends"
+                                : state.config.editOptInBundleIds.joined(separator: ", "))
+                        labelled(
                             "Screen context sent for",
                             state.config.contextOptInBundleIds.isEmpty
                                 ? "nothing"

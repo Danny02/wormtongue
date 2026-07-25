@@ -32,6 +32,7 @@ final class ContextProbe {
     private let focusAttributes: CFArray =
         [
             kAXRoleAttribute as String, kAXSubroleAttribute as String, kAXValueAttribute as String,
+            kAXSelectedTextAttribute as String,
         ] as CFArray
 
     /// Roles whose subtrees cannot contain readable conversation text. Skipping
@@ -71,15 +72,18 @@ final class ContextProbe {
             appName: app.localizedName)
     }
 
-    func probe(_ target: Target, charCap: Int) async -> ProbeResult {
+    func probe(_ target: Target, contextCharCap: Int, fieldCharCap: Int) async -> ProbeResult {
         await withCheckedContinuation { continuation in
             queue.async {
-                continuation.resume(returning: self.probeSync(target, charCap: charCap))
+                continuation.resume(
+                    returning: self.probeSync(
+                        target, contextCharCap: contextCharCap, fieldCharCap: fieldCharCap))
             }
         }
     }
 
-    private func probeSync(_ target: Target, charCap: Int) -> ProbeResult {
+    private func probeSync(_ target: Target, contextCharCap: Int, fieldCharCap: Int) -> ProbeResult
+    {
         let started = ContinuousClock.now
         let deadline = started.advanced(by: budget)
         var context = FieldContext(bundleId: target.bundleId, appName: target.appName)
@@ -93,20 +97,44 @@ final class ContextProbe {
             return ProbeResult(context: context, focusedElement: nil)
         }
 
-        // One round trip for role + subrole + value. The API documents a parallel
-        // array, but a short one would be an out-of-bounds crash in the hot path.
-        if let values = AX.values(focused, focusAttributes), values.count == 3 {
+        // One round trip for role + subrole + value + selected text. The API
+        // documents a parallel array, but a short one would be an out-of-bounds
+        // crash in the hot path.
+        var fieldValue: String?
+        if let values = AX.values(focused, focusAttributes), values.count == 4 {
             context.role = values[0] as? String
             context.subrole = values[1] as? String
-            context.fieldValue = values[2] as? String
+            fieldValue = values[2] as? String
+            context.selectedText = values[3] as? String
         }
         context.isSecureField = context.subrole == (kAXSecureTextFieldSubrole as String)
 
         if context.isSecureField {
             // Nothing else gets read, nothing gets sent.
-            context.fieldValue = nil
+            context.selectedText = nil
             context.elapsed = started.duration(to: .now).seconds
             return ProbeResult(context: context, focusedElement: focused)
+        }
+
+        // Where the caret is, or what is selected. This is what tells us whether the
+        // dictation is meant to add text or change text that is already there.
+        if let range = AX.range(focused, kAXSelectedTextRangeAttribute as String) {
+            context.selectionLocation = range.location
+            context.selectionLength = range.length
+        }
+
+        // A field can be an entire source file. Send the tail, and record that we
+        // only saw part of it so nothing downstream tries to rewrite the whole thing.
+        if let fieldValue {
+            if fieldValue.count > fieldCharCap {
+                context.fieldValue = String(fieldValue.suffix(fieldCharCap))
+                context.fieldTruncated = true
+            } else {
+                context.fieldValue = fieldValue
+            }
+        }
+        if let selected = context.selectedText, selected.count > fieldCharCap {
+            context.selectedText = String(selected.prefix(fieldCharCap))
         }
 
         // Walk up to the window for its title (the Slack channel name, etc.).
@@ -134,7 +162,7 @@ final class ContextProbe {
 
         // Keeps only the last `charCap` characters as it goes, so a busy channel
         // does not materialise its whole scrollback before we discard most of it.
-        var tail = TailBuffer(capacity: charCap)
+        var tail = TailBuffer(capacity: contextCharCap)
         var visited = 0
         var stoppedEarly = false
         collect(

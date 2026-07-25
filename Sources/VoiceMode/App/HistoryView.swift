@@ -35,6 +35,11 @@ struct HistoryView: View {
                 if !dictation.llmUsed {
                     Text("raw").font(.caption2).foregroundStyle(.secondary)
                 }
+                if dictation.action.isDestructive {
+                    Label(dictation.action.label, systemImage: "pencil.and.outline")
+                        .font(.caption2)
+                        .foregroundStyle(.purple)
+                }
                 Text("via \(dictation.method.rawValue)").font(.caption2).foregroundStyle(.secondary)
             }
 
@@ -53,6 +58,9 @@ struct HistoryView: View {
 
             HStack {
                 Button("Re-insert") { state.reinsert(dictation) }
+                if dictation.canRevert {
+                    Button("Revert") { state.revert(dictation) }
+                }
                 Menu("Re-run as…") {
                     ForEach(state.config.modes, id: \.name) { mode in
                         Button(mode.name) { state.rerun(dictation, as: mode) }

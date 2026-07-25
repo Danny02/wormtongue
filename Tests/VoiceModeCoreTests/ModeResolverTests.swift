@@ -6,6 +6,7 @@ import Testing
 private func makeConfig(
     dictionary: [String] = [],
     llm: [String] = [],
+    edit: [String] = [],
     context: [String] = [],
     denied: [String] = [],
     modes: [Mode] = []
@@ -15,8 +16,10 @@ private func makeConfig(
         maxTokens: 512,
         whisperModel: "base",
         contextCharCap: 4000,
+        fieldCharCap: 4000,
         dictionary: dictionary,
         llmOptInBundleIds: llm,
+        editOptInBundleIds: edit,
         contextOptInBundleIds: context,
         deniedBundleIds: denied,
         insertRawFirst: false,
@@ -38,12 +41,36 @@ struct PolicyTests {
         #expect(!policy.contextAllowed)
     }
 
-    @Test("Opting in to the LLM pass does not opt in to sending screen context")
+    @Test("Opting in to the LLM pass does not opt in to the field or the screen")
     func llmWithoutContext() {
         let resolver = ModeResolver(config: makeConfig(llm: ["com.microsoft.VSCode"]))
         let policy = resolver.policy(for: "com.microsoft.VSCode")
         #expect(policy.llmAllowed)
+        #expect(!policy.fieldAllowed)
         #expect(!policy.contextAllowed)
+    }
+
+    @Test("The edit rung grants the field without granting the whole window")
+    func editWithoutContext() {
+        let resolver = ModeResolver(config: makeConfig(llm: ["ed"], edit: ["ed"]))
+        let policy = resolver.policy(for: "ed")
+        #expect(policy.llmAllowed)
+        #expect(policy.fieldAllowed)
+        #expect(!policy.contextAllowed)
+    }
+
+    @Test("Context opt-in implies field access — the window already contains the field")
+    func contextImpliesField() {
+        let resolver = ModeResolver(config: makeConfig(llm: ["slack"], context: ["slack"]))
+        let policy = resolver.policy(for: "slack")
+        #expect(policy.fieldAllowed)
+        #expect(policy.contextAllowed)
+    }
+
+    @Test("The edit rung is inert without the LLM rung")
+    func editWithoutLLMIsInert() {
+        let resolver = ModeResolver(config: makeConfig(edit: ["ed"]))
+        #expect(!resolver.policy(for: "ed").fieldAllowed)
     }
 
     @Test("Both lists together allow context")
@@ -60,14 +87,31 @@ struct PolicyTests {
         #expect(!policy.contextAllowed)
     }
 
-    @Test("A hard deny beats both opt-in lists")
+    @Test("A hard deny beats every opt-in list")
     func denyWins() {
         let resolver = ModeResolver(
-            config: makeConfig(llm: ["vault"], context: ["vault"], denied: ["vault"]))
+            config: makeConfig(
+                llm: ["vault"], edit: ["vault"], context: ["vault"], denied: ["vault"]))
         let policy = resolver.policy(for: "vault")
         #expect(policy.denied)
         #expect(!policy.llmAllowed)
+        #expect(!policy.fieldAllowed)
         #expect(!policy.contextAllowed)
+    }
+
+    @Test("An opt-in on a wider rung without the LLM rung is reported as inert")
+    func inertOptInsReported() {
+        let resolver = ModeResolver(
+            config: makeConfig(llm: ["a"], edit: ["a", "b"], context: ["c"]))
+        // "a" is fine; "b" and "c" can never take effect.
+        #expect(resolver.inertOptIns == ["b", "c"])
+    }
+
+    @Test("A correctly laddered config reports nothing inert")
+    func noInertOptIns() {
+        let resolver = ModeResolver(
+            config: makeConfig(llm: ["a", "b"], edit: ["a", "b"], context: ["b"]))
+        #expect(resolver.inertOptIns.isEmpty)
     }
 
     @Test("An app with no bundle id is treated as not opted in")
@@ -150,6 +194,10 @@ struct ModeMatchingTests {
 
 @Suite("Prompt assembly")
 struct PromptTests {
+    private let everythingAllowed = Policy(
+        denied: false, llmAllowed: true, fieldAllowed: true, contextAllowed: true)
+    private let fieldOnly = Policy(
+        denied: false, llmAllowed: true, fieldAllowed: true, contextAllowed: false)
 
     @Test("The dictionary block is appended to every system prompt")
     func dictionaryBlock() {
@@ -160,10 +208,13 @@ struct PromptTests {
         #expect(prompt.contains("<dictionary>"))
     }
 
-    @Test("No dictionary means the prompt is passed through untouched")
+    @Test("No dictionary means the mode prompt leads and only the editing block follows")
     func noDictionary() {
         let resolver = ModeResolver(config: makeConfig())
-        #expect(resolver.systemPrompt(for: Mode(name: "m", prompt: "base")) == "base")
+        let prompt = resolver.systemPrompt(for: Mode(name: "m", prompt: "base"))
+        #expect(prompt.hasPrefix("base"))
+        #expect(!prompt.contains("<dictionary>"))
+        #expect(prompt.contains("<editing>"))
     }
 
     @Test("Context is omitted entirely when the app has not opted in")
@@ -174,7 +225,9 @@ struct PromptTests {
             fieldValue: "half typed", surroundingText: "secret conversation")
 
         let message = resolver.userMessage(
-            transcript: "hello", context: context, contextAllowed: false)
+            transcript: "hello", context: context,
+            policy: Policy(
+                denied: false, llmAllowed: true, fieldAllowed: false, contextAllowed: false))
 
         #expect(message.contains("<transcript>"))
         #expect(message.contains("hello"))
@@ -192,7 +245,7 @@ struct PromptTests {
             fieldValue: "half typed", surroundingText: "heiko: shipping tomorrow")
 
         let message = resolver.userMessage(
-            transcript: "meeting with heiko", context: context, contextAllowed: true)
+            transcript: "meeting with heiko", context: context, policy: everythingAllowed)
 
         #expect(message.contains("<app>Slack</app>"))
         #expect(message.contains("<window>#eng</window>"))
@@ -208,7 +261,7 @@ struct PromptTests {
         let context = FieldContext(surroundingText: hostile)
 
         let message = resolver.userMessage(
-            transcript: "real words", context: context, contextAllowed: true)
+            transcript: "real words", context: context, policy: everythingAllowed)
 
         // Exactly one real transcript tag pair, and the injected one is defanged.
         #expect(message.components(separatedBy: "<transcript>").count == 2)
@@ -221,15 +274,103 @@ struct PromptTests {
     func transcriptNotMangled() {
         let resolver = ModeResolver(config: makeConfig())
         let code = "if x < y && y > z { return }"
-        let message = resolver.userMessage(transcript: code, context: nil, contextAllowed: true)
+        let message = resolver.userMessage(
+            transcript: code, context: nil, policy: everythingAllowed)
         #expect(message.contains(code))
+    }
+
+    @Test("The field rung sends the draft without sending the rest of the window")
+    func fieldWithoutWindow() {
+        let resolver = ModeResolver(config: makeConfig())
+        let context = FieldContext(
+            appName: "Slack", windowTitle: "#eng", fieldValue: "my half-typed draft",
+            selectionLocation: 19, surroundingText: "other people's messages")
+
+        let message = resolver.userMessage(
+            transcript: "make that shorter", context: context, policy: fieldOnly, intent: .revise)
+
+        #expect(message.contains("my half-typed draft"))
+        #expect(!message.contains("other people's messages"))
+        #expect(!message.contains("#eng"))
+        #expect(!message.contains("Slack"))
+    }
+
+    @Test("Without the field rung the draft is not sent even when it was read")
+    func fieldWithheld() {
+        let resolver = ModeResolver(config: makeConfig())
+        let context = FieldContext(fieldValue: "my half-typed draft", selectionLocation: 19)
+        let policy = Policy(
+            denied: false, llmAllowed: true, fieldAllowed: false, contextAllowed: false)
+
+        let message = resolver.userMessage(
+            transcript: "hello", context: context, policy: policy, intent: .compose)
+
+        #expect(!message.contains("half-typed"))
+        #expect(!message.contains("<current_field_content>"))
+    }
+
+    @Test("Revising marks where the caret sits inside the draft")
+    func caretMarked() {
+        let resolver = ModeResolver(config: makeConfig())
+        let context = FieldContext(fieldValue: "Hello world", selectionLocation: 5)
+
+        let message = resolver.userMessage(
+            transcript: "add a greeting", context: context, policy: fieldOnly, intent: .revise)
+
+        #expect(message.contains("Hello" + ModeResolver.caretMarker + " world"))
+        #expect(message.contains("marks the caret"))
+    }
+
+    @Test("Replacing a selection sends the selection separately from the draft")
+    func selectionSentSeparately() {
+        let resolver = ModeResolver(config: makeConfig())
+        let context = FieldContext(
+            fieldValue: "ship it tomorrow please", selectedText: "tomorrow",
+            selectionLocation: 8, selectionLength: 8)
+
+        let message = resolver.userMessage(
+            transcript: "Thursday", context: context, policy: fieldOnly,
+            intent: .replaceSelection)
+
+        #expect(message.contains("<selected_text>\ntomorrow\n</selected_text>"))
+        #expect(message.contains("ship it tomorrow please"))
+        // No caret marker: the selection, not the caret, is what matters here.
+        #expect(!message.contains(ModeResolver.caretMarker))
+    }
+
+    @Test("A truncated draft says so, so the model knows not to rewrite the whole thing")
+    func truncationAnnounced() {
+        let resolver = ModeResolver(config: makeConfig())
+        let context = FieldContext(fieldValue: "…the visible tail", fieldTruncated: true)
+
+        let message = resolver.userMessage(
+            transcript: "tidy this up", context: context, policy: fieldOnly, intent: .revise)
+
+        #expect(message.contains("cannot be rewritten as a whole"))
+    }
+
+    @Test("Each intent gets its own mechanics, and only revise asks for a decision")
+    func editingBlockPerIntent() {
+        #expect(ModeResolver.editingBlock(for: .compose).contains("field is empty"))
+        #expect(ModeResolver.editingBlock(for: .replaceSelection).contains("replace exactly that"))
+
+        let revise = ModeResolver.editingBlock(for: .revise)
+        #expect(revise.contains("\"insert\""))
+        #expect(revise.contains("\"replace_all\""))
+        // The bias toward the recoverable action has to be stated in the prompt too,
+        // not just enforced in the parser.
+        #expect(revise.contains("When in doubt choose"))
+
+        #expect(!ModeResolver.editingBlock(for: .compose).contains("replace_all"))
+        #expect(!ModeResolver.editingBlock(for: .replaceSelection).contains("replace_all"))
     }
 
     @Test("Empty context fields are dropped rather than emitted as empty tags")
     func emptyFieldsDropped() {
         let resolver = ModeResolver(config: makeConfig())
         let context = FieldContext(appName: "Notes", windowTitle: "", surroundingText: "")
-        let message = resolver.userMessage(transcript: "hi", context: context, contextAllowed: true)
+        let message = resolver.userMessage(
+            transcript: "hi", context: context, policy: everythingAllowed)
         #expect(!message.contains("<window>"))
         #expect(!message.contains("<visible_context>"))
         #expect(message.contains("<app>Notes</app>"))

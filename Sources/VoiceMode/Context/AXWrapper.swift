@@ -44,6 +44,24 @@ enum AX {
         return out
     }
 
+    /// Reads a `CFRange`-typed attribute — `kAXSelectedTextRangeAttribute` is one.
+    /// The value arrives boxed in an `AXValue` rather than as a plain CFType.
+    static func range(_ element: AXUIElement, _ attribute: String) -> CFRange? {
+        guard let value = copyAttribute(element, attribute),
+            CFGetTypeID(value) == AXValueGetTypeID()
+        else { return nil }
+        let boxed = value as! AXValue
+        guard AXValueGetType(boxed) == .cfRange else { return nil }
+        var range = CFRange()
+        guard AXValueGetValue(boxed, .cfRange, &range) else { return nil }
+        return range
+    }
+
+    static func makeRange(location: Int, length: Int) -> AXValue? {
+        var range = CFRange(location: location, length: length)
+        return AXValueCreate(.cfRange, &range)
+    }
+
     static func isSettable(_ element: AXUIElement, _ attribute: String) -> Bool {
         var settable: DarwinBoolean = false
         guard AXUIElementIsAttributeSettable(element, attribute as CFString, &settable) == .success

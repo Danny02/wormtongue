@@ -3,6 +3,7 @@
   "max_tokens": 1024,
   "whisper_model": "base",
   "context_char_cap": 4000,
+  "field_char_cap": 4000,
 
   "dictionary": [
     "Heiko",
@@ -18,7 +19,13 @@
     "com.microsoft.VSCode"
   ],
 
-  "//context": "Narrower still: only these apps have their on-screen text sent to the API.",
+  "//edit": "Middle rung: these apps may have the FOCUSED FIELD's own text sent, which is what lets dictation modify an existing draft instead of only appending. Implied by context_opt_in_bundle_ids.",
+  "edit_opt_in_bundle_ids": [
+    "com.tinyspeck.slackmacgap",
+    "com.microsoft.VSCode"
+  ],
+
+  "//context": "Widest rung: only these apps have their surrounding on-screen text sent to the API.",
   "context_opt_in_bundle_ids": [
     "com.tinyspeck.slackmacgap"
   ],
