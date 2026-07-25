@@ -1,4 +1,5 @@
 // swift-tools-version: 6.0
+import Foundation
 import PackageDescription
 
 // The package is split so the parts with real edge cases can be built and tested

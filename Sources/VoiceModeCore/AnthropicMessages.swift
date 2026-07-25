@@ -187,7 +187,7 @@ public enum AnthropicMessages {
 
     /// Anything we cannot read as a decision degrades to inserting the response
     /// verbatim. A malformed reply must never be able to mean "replace the draft".
-    static func parse(decision text: String) -> EditDecision {
+    public static func parse(decision text: String) -> EditDecision {
         let candidate = stripCodeFence(text)
         guard
             let data = candidate.data(using: .utf8),

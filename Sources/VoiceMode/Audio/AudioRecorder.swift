@@ -134,7 +134,7 @@ final class AudioRecorder {
         lock.unlock()
 
         if overflowed {
-            log.notice("recording hit the \(Int(maxSeconds))s cap; tail was discarded")
+            log.notice("recording hit the \(Int(self.maxSeconds))s cap; tail was discarded")
         }
         return captured
     }

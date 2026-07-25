@@ -34,7 +34,7 @@ struct HistoryView: View {
                 }
                 Text(dictation.destination.label)
                     .font(.caption2)
-                    .foregroundStyle(dictation.destination == .cloud ? .secondary : .green)
+                    .foregroundStyle(dictation.destination == .cloud ? Color.secondary : Color.green)
                 if dictation.action.isDestructive {
                     Label(dictation.action.label, systemImage: "pencil.and.outline")
                         .font(.caption2)
