@@ -3,12 +3,11 @@ import ApplicationServices
 import Combine
 import Foundation
 import KeyboardShortcuts
+import VoiceModeCore
 
 struct Dictation: Identifiable {
     let id = UUID()
     let date = Date()
-    var appName: String?
-    var bundleId: String?
     var modeName: String
     var raw: String
     var result: String
@@ -16,9 +15,11 @@ struct Dictation: Identifiable {
     var llmUsed: Bool
     var method: InsertionMethod
     var timings: String
+    var context: FieldContext
     /// Held so "re-insert" and "re-run" can target the same field.
     var focusedElement: AXUIElement?
-    var probe: ProbeResult?
+
+    var appName: String? { context.appName }
 }
 
 @MainActor
@@ -34,53 +35,75 @@ final class AppState: ObservableObject {
         /// `contextSent` drives the visible indicator required by §7.
         case rewriting(contextSent: Bool)
         case inserting
+        case done
         case failed(String)
     }
 
     @Published private(set) var phase: Phase = .idle
     @Published private(set) var history: [Dictation] = []
-    @Published private(set) var lastProbe: ProbeResult?
+    @Published private(set) var lastContext: FieldContext?
     @Published private(set) var configError: String?
     @Published private(set) var modelReady = false
-    @Published var config: Config = .default
+    /// 0…1, polled from the recorder rather than pushed from the audio thread.
+    @Published private(set) var inputLevel: Float = 0
+    @Published private(set) var recordedSeconds: TimeInterval = 0
+    @Published private(set) var targetAppName: String?
+    @Published private(set) var activeModeName: String?
+    @Published private(set) var lastResultPreview: String?
+    @Published private(set) var config: Config = .fallback
 
     private let recorder = AudioRecorder()
     private let transcriber = Transcriber()
-    private let probe = ContextProbe()
+    private let contextProbe = ContextProbe()
     private let inserter = TextInserter()
     private let anthropic = AnthropicClient()
+    private let overlay = OverlayController()
+
+    /// Rebuilt only when the config changes — it precompiles regexes and builds
+    /// lookup sets, which has no business happening inside the latency budget.
+    private(set) var resolver = ModeResolver(config: .fallback)
 
     private var recordingTarget: ContextProbe.Target?
+    /// Started on key-down so the AX traversal overlaps the recording instead of
+    /// sitting in the post-release critical path.
+    private var probeTask: Task<ProbeResult?, Never>?
+    private var pipelineTask: Task<Void, Never>?
+    private var levelTask: Task<Void, Never>?
+    private var didBootstrap = false
     private let historyLimit = 25
 
-    var resolver: ModeResolver { ModeResolver(config: config) }
+    var failureMessage: String? {
+        if case let .failed(message) = phase { return message }
+        return nil
+    }
 
     var statusSymbol: String {
         switch phase {
-        case .idle: return Permissions.isGranted(.accessibility) ? "mic" : "exclamationmark.triangle"
+        case .idle:
+            return Permissions.isGranted(.accessibility) ? "mic" : "exclamationmark.triangle"
         case .recording: return "mic.fill"
         case .transcribing: return "waveform"
         case let .rewriting(contextSent): return contextSent ? "paperplane.fill" : "wand.and.stars"
-        case .inserting: return "text.cursor"
+        case .inserting, .done: return "text.cursor"
         case .failed: return "exclamationmark.triangle.fill"
         }
     }
 
     var statusText: String {
         switch phase {
-        case .idle: return "Ready"
+        case .idle: return modelReady ? "Ready" : "Loading Whisper model…"
         case .recording: return "Recording…"
         case .transcribing: return "Transcribing…"
         case let .rewriting(contextSent):
-            return contextSent ? "Rewriting — sending screen context" : "Rewriting — transcript only"
+            return contextSent
+                ? "Rewriting — sending screen context" : "Rewriting — transcript only"
         case .inserting: return "Inserting…"
+        case .done: return "Inserted"
         case let .failed(message): return "Error: \(message)"
         }
     }
 
     // MARK: - Lifecycle
-
-    private var didBootstrap = false
 
     func bootstrap() {
         guard !didBootstrap else { return }
@@ -88,6 +111,7 @@ final class AppState: ObservableObject {
 
         reloadConfig()
         Hotkey.installDefaultIfUnset()
+        overlay.attach(self)
 
         // Push-to-talk: record on key-down, transcribe on key-up.
         KeyboardShortcuts.onKeyDown(for: .dictate) { [weak self] in
@@ -103,8 +127,17 @@ final class AppState: ObservableObject {
     func reloadConfig() {
         let (loaded, error) = ConfigStore.load()
         config = loaded
-        configError = error
-        if let error { log.error("config: \(error, privacy: .public)") }
+        resolver = ModeResolver(config: loaded)
+        Feedback.enabled = loaded.soundFeedback
+
+        var problems: [String] = []
+        if let error { problems.append(error) }
+        let badPatterns = resolver.invalidTitlePatterns
+        if !badPatterns.isEmpty {
+            problems.append("Unusable window title regex — \(badPatterns.joined(separator: "; "))")
+        }
+        configError = problems.isEmpty ? nil : problems.joined(separator: "\n")
+        if let configError { log.error("config: \(configError, privacy: .public)") }
     }
 
     func prewarmModel() async {
@@ -113,38 +146,84 @@ final class AppState: ObservableObject {
             modelReady = true
         } catch {
             modelReady = false
-            phase = .failed("Whisper model: \(error.localizedDescription)")
+            fail("Whisper model: \(error.localizedDescription)")
         }
     }
 
     // MARK: - Push-to-talk
 
     func hotkeyPressed() {
-        guard case .idle = phase else { return }
-        guard !recorder.isRecording else { return }
-
-        // Never record into a password field.
-        if Permissions.secureInputEnabled {
-            log.notice("dictation blocked: secure input is enabled")
-            NSSound.beep()
-            return
-        }
-        // Capture the target now, while the user's app is still frontmost.
-        recordingTarget = ContextProbe.frontmostTarget()
-
-        do {
-            try recorder.start()
-            phase = .recording
-        } catch {
-            phase = .failed(error.localizedDescription)
+        switch phase {
+        case .idle, .done, .failed:
+            startRecording()
+        case .recording:
+            break  // key repeat
+        case .transcribing, .rewriting, .inserting:
+            // Second press while we are working means "never mind".
+            cancel()
         }
     }
 
     func hotkeyReleased() {
         guard case .recording = phase else { return }
+        finishRecording()
+    }
+
+    private func startRecording() {
+        // Never record into a password field.
+        if Permissions.secureInputEnabled {
+            log.notice("dictation blocked: secure input is enabled")
+            fail("A password field has the keyboard — dictation is disabled.")
+            return
+        }
+        // Capture the target now, while the user's app is still frontmost.
+        guard let target = ContextProbe.frontmostTarget() else {
+            fail("Could not identify the frontmost app.")
+            return
+        }
+        recordingTarget = target
+        targetAppName = target.appName
+
+        do {
+            try recorder.start()
+        } catch {
+            recordingTarget = nil
+            fail(error.localizedDescription)
+            return
+        }
+
+        phase = .recording
+        recordedSeconds = 0
+        inputLevel = 0
+        lastResultPreview = nil
+        activeModeName = nil
+        showOverlayIfEnabled()
+        Feedback.recordingStarted()
+        startLevelPolling()
+
+        let policy = resolver.policy(for: target.bundleId)
+
+        // The AX traversal is IPC-bound and takes 100–700ms. Starting it here
+        // rather than on release takes it off the critical path entirely: focus
+        // cannot change while the user is holding the key.
+        let charCap = config.contextCharCap
+        probeTask = Task { [contextProbe] in
+            guard !policy.denied else { return nil }
+            return await contextProbe.probe(target, charCap: charCap)
+        }
+
+        // Same idea for the TLS handshake to api.anthropic.com.
+        if policy.llmAllowed {
+            Task { [anthropic] in await anthropic.warmConnection() }
+        }
+    }
+
+    private func finishRecording() {
+        stopLevelPolling()
         let samples = recorder.stop()
         guard let target = recordingTarget else {
             phase = .idle
+            overlay.hide()
             return
         }
         recordingTarget = nil
@@ -152,11 +231,30 @@ final class AppState: ObservableObject {
         // A tap with no speech in it. Don't spin up Whisper.
         guard samples.count > Int(AudioRecorder.targetSampleRate * 0.2) else {
             log.debug("discarded \(samples.count) samples: too short")
+            probeTask?.cancel()
+            probeTask = nil
             phase = .idle
+            overlay.hide()
             return
         }
 
-        Task { await runPipeline(samples: samples, target: target) }
+        pipelineTask = Task { await runPipeline(samples: samples, target: target) }
+    }
+
+    func cancel() {
+        pipelineTask?.cancel()
+        pipelineTask = nil
+        probeTask?.cancel()
+        probeTask = nil
+        if recorder.isRecording {
+            recorder.cancel()
+            stopLevelPolling()
+        }
+        recordingTarget = nil
+        phase = .idle
+        overlay.hide()
+        Feedback.cancelled()
+        log.notice("dictation cancelled")
     }
 
     // MARK: - Pipeline
@@ -166,53 +264,61 @@ final class AppState: ObservableObject {
         let policy = resolver.policy(for: target.bundleId)
         phase = .transcribing
 
-        // The probe is IPC-bound and the transcription is compute-bound; they have
-        // no dependency on each other, so overlap them.
-        let charCap = config.contextCharCap
-        async let probed = probeIfAllowed(policy: policy, target: target, charCap: charCap)
-
         let transcript: String
         do {
             transcript = try await transcriber.transcribe(samples, model: config.whisperModel)
+            watch.lap("transcribe")
         } catch {
-            _ = await probed
-            phase = .failed("Transcription: \(error.localizedDescription)")
+            probeTask?.cancel()
+            probeTask = nil
+            guard !Task.isCancelled else { return }
+            fail("Transcription: \(error.localizedDescription)")
             return
         }
-        let result = await probed
-        watch.lap("transcribe+probe")
 
-        lastProbe = result
-        if let result {
-            log.info("probe:\n\(result.debugSummary, privacy: .private)")
+        // Almost certainly already finished — it has been running since key-down.
+        var probed: ProbeResult?
+        if let probeTask { probed = await probeTask.value }
+        probeTask = nil
+        guard !Task.isCancelled else { return }
+
+        let context =
+            probed?.context ?? FieldContext(bundleId: target.bundleId, appName: target.appName)
+        let element = probed?.focusedElement
+        lastContext = context
+        if probed != nil {
+            watch.note("probe", seconds: context.elapsed)
+            log.info("probe:\n\(context.debugSummary, privacy: .private)")
         }
 
         guard !transcript.isEmpty else {
             phase = .idle
+            overlay.hide()
             return
         }
 
-        // Focused a password field between key-down and key-up.
-        if result?.isSecureField == true {
+        // Focus moved to a password field between key-down and key-up.
+        if context.isSecureField {
             log.notice("dictation discarded: focused element is a secure text field")
             phase = .idle
+            overlay.hide()
             return
         }
 
-        let mode = resolver.mode(bundleId: target.bundleId, windowTitle: result?.windowTitle)
-        let element = result?.focusedElement
+        let mode = resolver.mode(bundleId: target.bundleId, windowTitle: context.windowTitle)
+        activeModeName = mode.name
 
         // Denied, or the app never opted in: raw transcript, nothing leaves the machine.
         guard policy.llmAllowed else {
             phase = .inserting
             let method = inserter.insert(transcript, into: element)
             watch.lap("insert")
-            record(Dictation(appName: target.appName, bundleId: target.bundleId,
-                             modeName: policy.denied ? "denied (raw)" : "not opted in (raw)",
-                             raw: transcript, result: transcript,
-                             contextSent: false, llmUsed: false, method: method,
-                             timings: watch.summary, focusedElement: element, probe: result))
-            phase = .idle
+            finish(
+                Dictation(
+                    modeName: policy.denied ? "denied (raw)" : "not opted in (raw)",
+                    raw: transcript, result: transcript,
+                    contextSent: false, llmUsed: false, method: method,
+                    timings: watch.summary, context: context, focusedElement: element))
             return
         }
 
@@ -227,63 +333,118 @@ final class AppState: ObservableObject {
         }
 
         phase = .rewriting(contextSent: policy.contextAllowed)
-        let system = resolver.systemPrompt(for: mode)
-        let user = resolver.userMessage(transcript: transcript,
-                                        probe: result,
-                                        contextAllowed: policy.contextAllowed)
-
         let rewritten: String
         do {
             rewritten = try await anthropic.rewrite(
                 model: mode.model ?? config.model,
-                system: system,
-                user: user,
+                system: resolver.systemPrompt(for: mode),
+                user: resolver.userMessage(
+                    transcript: transcript, context: context,
+                    contextAllowed: policy.contextAllowed),
                 maxTokens: config.maxTokens
             )
             watch.lap("llm")
         } catch {
+            if Task.isCancelled || error is CancellationError { return }
+            if let apiError = error as? AnthropicError, apiError == .cancelled { return }
+
             log.error("llm: \(error.localizedDescription, privacy: .public)")
             // Fall back to the raw transcript rather than dropping the utterance.
             if rawInserted == 0 {
                 phase = .inserting
                 let method = inserter.insert(transcript, into: element)
-                record(Dictation(appName: target.appName, bundleId: target.bundleId,
-                                 modeName: "\(mode.name) (llm failed)",
-                                 raw: transcript, result: transcript,
-                                 contextSent: policy.contextAllowed, llmUsed: false, method: method,
-                                 timings: watch.summary, focusedElement: element, probe: result))
+                watch.lap("insert-fallback")
+                record(
+                    Dictation(
+                        modeName: "\(mode.name) (llm failed)",
+                        raw: transcript, result: transcript,
+                        contextSent: policy.contextAllowed, llmUsed: false, method: method,
+                        timings: watch.summary, context: context, focusedElement: element))
             }
-            phase = .failed(error.localizedDescription)
+            fail(error.localizedDescription)
             return
         }
 
+        guard !Task.isCancelled else { return }
         phase = .inserting
-        let method = rawInserted > 0
+        let method =
+            rawInserted > 0
             ? inserter.replaceTrailing(characterCount: rawInserted, with: rewritten, into: element)
             : inserter.insert(rewritten, into: element)
         watch.lap("insert")
 
-        record(Dictation(appName: target.appName, bundleId: target.bundleId, modeName: mode.name,
-                         raw: transcript, result: rewritten,
-                         contextSent: policy.contextAllowed, llmUsed: true, method: method,
-                         timings: watch.summary, focusedElement: element, probe: result))
-        phase = .idle
+        finish(
+            Dictation(
+                modeName: mode.name, raw: transcript, result: rewritten,
+                contextSent: policy.contextAllowed, llmUsed: true, method: method,
+                timings: watch.summary, context: context, focusedElement: element))
     }
 
-    /// A hard-denied app is not probed at all — we do not even read its tree.
-    private func probeIfAllowed(policy: Policy, target: ContextProbe.Target,
-                                charCap: Int) async -> ProbeResult? {
-        guard !policy.denied else { return nil }
-        return await probe.probe(target, charCap: charCap)
-    }
-
+    /// Appends to history and logs. Says nothing about whether the dictation
+    /// succeeded — the LLM-failure path records a fallback insert and then fails.
     private func record(_ dictation: Dictation) {
         history.insert(dictation, at: 0)
         if history.count > historyLimit { history.removeLast(history.count - historyLimit) }
-        log.info("""
+        lastResultPreview = dictation.result
+        log.info(
+            """
             \(dictation.modeName, privacy: .public) via \(dictation.method.rawValue, privacy: .public) \
             | \(dictation.timings, privacy: .public)
             """)
+    }
+
+    private func finish(_ dictation: Dictation) {
+        record(dictation)
+        pipelineTask = nil
+        if dictation.method == .aborted {
+            fail("Insertion was blocked — a secure field took focus.")
+            return
+        }
+        phase = .done
+        Feedback.inserted()
+        overlay.hide(after: 1.4)
+        // Clear the transient "done" state so the menu bar returns to Ready.
+        Task { [weak self] in
+            try? await Task.sleep(for: .seconds(1.6))
+            guard let self else { return }
+            if case .done = self.phase { self.phase = .idle }
+        }
+    }
+
+    private func fail(_ message: String) {
+        pipelineTask = nil
+        phase = .failed(message)
+        Feedback.failed()
+        showOverlayIfEnabled()
+        overlay.hide(after: 3.5)
+    }
+
+    // MARK: - Overlay and metering
+
+    private func showOverlayIfEnabled() {
+        guard config.showOverlay else { return }
+        overlay.show()
+    }
+
+    /// Polls the recorder at 20 Hz. The alternative — publishing from the audio
+    /// render thread — would put SwiftUI invalidation on a realtime thread and
+    /// update far more often than any display can show.
+    private func startLevelPolling() {
+        levelTask?.cancel()
+        levelTask = Task { [weak self] in
+            while !Task.isCancelled {
+                guard let self, self.recorder.isRecording else { return }
+                self.inputLevel = self.recorder.level
+                self.recordedSeconds = self.recorder.duration
+                try? await Task.sleep(for: .milliseconds(50))
+            }
+        }
+    }
+
+    private func stopLevelPolling() {
+        levelTask?.cancel()
+        levelTask = nil
+        inputLevel = 0
     }
 
     // MARK: - History actions (M4)
@@ -293,27 +454,40 @@ final class AppState: ObservableObject {
     }
 
     func rerun(_ dictation: Dictation, as mode: Mode) {
-        Task {
+        pipelineTask?.cancel()
+        pipelineTask = Task {
+            activeModeName = mode.name
             phase = .rewriting(contextSent: dictation.contextSent)
+            showOverlayIfEnabled()
             do {
                 let text = try await anthropic.rewrite(
                     model: mode.model ?? config.model,
                     system: resolver.systemPrompt(for: mode),
-                    user: resolver.userMessage(transcript: dictation.raw,
-                                               probe: dictation.probe,
-                                               contextAllowed: dictation.contextSent),
+                    user: resolver.userMessage(
+                        transcript: dictation.raw, context: dictation.context,
+                        contextAllowed: dictation.contextSent),
                     maxTokens: config.maxTokens
                 )
+                guard !Task.isCancelled else { return }
                 phase = .inserting
-                _ = inserter.insert(text, into: dictation.focusedElement)
-                phase = .idle
+                let method = inserter.insert(text, into: dictation.focusedElement)
+                finish(
+                    Dictation(
+                        modeName: "\(mode.name) (re-run)", raw: dictation.raw, result: text,
+                        contextSent: dictation.contextSent, llmUsed: true, method: method,
+                        timings: "re-run", context: dictation.context,
+                        focusedElement: dictation.focusedElement))
             } catch {
-                phase = .failed(error.localizedDescription)
+                guard !Task.isCancelled else { return }
+                fail(error.localizedDescription)
             }
         }
     }
 
     func dismissError() {
-        if case .failed = phase { phase = .idle }
+        if case .failed = phase {
+            phase = .idle
+            overlay.hide()
+        }
     }
 }

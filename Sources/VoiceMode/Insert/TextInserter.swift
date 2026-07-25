@@ -33,7 +33,9 @@ final class TextInserter {
 
     /// Replaces `characterCount` characters before the caret with `text`.
     /// Used only by the raw-first path; backspace-based and therefore fragile.
-    func replaceTrailing(characterCount: Int, with text: String, into element: AXUIElement?) -> InsertionMethod {
+    func replaceTrailing(
+        characterCount: Int, with text: String, into element: AXUIElement?
+    ) -> InsertionMethod {
         guard characterCount > 0 else { return insert(text, into: element) }
         if Permissions.secureInputEnabled { return .aborted }
         for _ in 0..<characterCount {
@@ -50,7 +52,9 @@ final class TextInserter {
         guard AX.set(element, attribute, text as CFString) else { return false }
         // Read back: some apps report the attribute settable and then no-op.
         if let value = AX.string(element, kAXValueAttribute as String), !value.contains(text) {
-            log.debug("AX insertion reported success but value does not contain the text; falling back to paste")
+            log.debug(
+                "AX insertion reported success but value does not contain the text; falling back to paste"
+            )
             return false
         }
         return true
@@ -87,7 +91,9 @@ final class TextInserter {
         }
     }
 
-    private func restore(_ snapshot: [[NSPasteboard.PasteboardType: Data]], to pasteboard: NSPasteboard) {
+    private func restore(
+        _ snapshot: [[NSPasteboard.PasteboardType: Data]], to pasteboard: NSPasteboard
+    ) {
         pasteboard.clearContents()
         let items = snapshot.compactMap { payload -> NSPasteboardItem? in
             guard !payload.isEmpty else { return nil }

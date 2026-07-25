@@ -18,7 +18,9 @@ actor Transcriber {
         let started = Date()
         pipe = try await WhisperKit(WhisperKitConfig(model: model))
         loadedModel = model
-        log.info("whisper model \(model, privacy: .public) ready in \(Int(Date().timeIntervalSince(started) * 1000))ms")
+        log.info(
+            "whisper model \(model, privacy: .public) ready in \(Int(Date().timeIntervalSince(started) * 1000))ms"
+        )
     }
 
     func transcribe(_ samples: [Float], model: String) async throws -> String {

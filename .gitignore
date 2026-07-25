@@ -6,3 +6,6 @@ Package.resolved
 *.xcworkspace
 DerivedData/
 .DS_Store
+
+# Local Swift toolchain used for the Linux-side checks
+/opt/

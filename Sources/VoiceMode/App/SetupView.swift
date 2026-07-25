@@ -1,6 +1,7 @@
 import Combine
 import KeyboardShortcuts
 import SwiftUI
+import VoiceModeCore
 
 /// First-run checklist. Getting permissions wrong is the #1 way this app looks
 /// broken, so every one of them gets a live status dot and a deep link.
@@ -30,25 +31,30 @@ struct SetupView: View {
                 GroupBox("Hotkey") {
                     VStack(alignment: .leading, spacing: 6) {
                         KeyboardShortcuts.Recorder("Hold to dictate:", name: .dictate)
-                        Text("Push-to-talk: recording starts on key-down and transcribes on release.")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
+                        Text(
+                            "Push-to-talk: recording starts on key-down and transcribes on release."
+                        )
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                     }
                     .padding(6)
                 }
 
                 GroupBox("Anthropic API Key") {
                     VStack(alignment: .leading, spacing: 8) {
-                        Text(Keychain.hasStoredKey
-                             ? "A key is stored in the Keychain."
-                             : "No key in the Keychain. ANTHROPIC_API_KEY is used as a fallback.")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
+                        Text(
+                            Keychain.hasStoredKey
+                                ? "A key is stored in the Keychain."
+                                : "No key in the Keychain. ANTHROPIC_API_KEY is used as a fallback."
+                        )
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                         HStack {
                             SecureField("sk-ant-…", text: $apiKeyField)
                                 .frame(maxWidth: 320)
                             Button("Save") {
-                                apiKeyStatus = Keychain.save(apiKeyField)
+                                apiKeyStatus =
+                                    Keychain.save(apiKeyField)
                                     ? "Saved to Keychain." : "Keychain write failed."
                                 apiKeyField = ""
                             }
@@ -71,14 +77,20 @@ struct SetupView: View {
                         labelled("Whisper model", state.config.whisperModel)
                         labelled("Rewrite model", state.config.model)
                         labelled("Modes", state.config.modes.map(\.name).joined(separator: ", "))
-                        labelled("LLM pass allowed for",
-                                 state.config.llmOptInBundleIds.isEmpty
-                                 ? "nothing yet — every app gets the raw transcript"
-                                 : state.config.llmOptInBundleIds.joined(separator: ", "))
-                        labelled("Screen context sent for",
-                                 state.config.contextOptInBundleIds.isEmpty
-                                 ? "nothing"
-                                 : state.config.contextOptInBundleIds.joined(separator: ", "))
+                        labelled(
+                            "LLM pass allowed for",
+                            state.config.llmOptInBundleIds.isEmpty
+                                ? "nothing yet — every app gets the raw transcript"
+                                : state.config.llmOptInBundleIds.joined(separator: ", "))
+                        labelled(
+                            "Screen context sent for",
+                            state.config.contextOptInBundleIds.isEmpty
+                                ? "nothing"
+                                : state.config.contextOptInBundleIds.joined(separator: ", "))
+                        labelled(
+                            "Overlay / sounds",
+                            "\(state.config.showOverlay ? "overlay on" : "overlay off") · "
+                                + (state.config.soundFeedback ? "sounds on" : "sounds off"))
                         if let error = state.configError {
                             Text(error).font(.caption).foregroundStyle(.red)
                         }
@@ -87,9 +99,9 @@ struct SetupView: View {
                     .padding(6)
                 }
 
-                if let probe = state.lastProbe {
+                if let context = state.lastContext {
                     GroupBox("Last context probe") {
-                        Text(probe.debugSummary)
+                        Text(context.debugSummary)
                             .font(.system(.caption, design: .monospaced))
                             .textSelection(.enabled)
                             .frame(maxWidth: .infinity, alignment: .leading)
@@ -107,10 +119,12 @@ struct SetupView: View {
     private var header: some View {
         VStack(alignment: .leading, spacing: 4) {
             Text("VoiceMode").font(.title2).bold()
-            Text("Audio is transcribed on-device. The rewrite pass sends the transcript — and, for apps you opt in, the surrounding on-screen text — to the Anthropic API.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
+            Text(
+                "Audio is transcribed on-device. The rewrite pass sends the transcript — and, for apps you opt in, the surrounding on-screen text — to the Anthropic API."
+            )
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
         }
     }
 
@@ -133,7 +147,8 @@ struct SetupView: View {
 
     private func labelled(_ name: String, _ value: String) -> some View {
         HStack(alignment: .top) {
-            Text(name).font(.caption).foregroundStyle(.secondary).frame(width: 150, alignment: .leading)
+            Text(name).font(.caption).foregroundStyle(.secondary).frame(
+                width: 150, alignment: .leading)
             Text(value).font(.system(.caption, design: .monospaced)).textSelection(.enabled)
             Spacer()
         }
@@ -144,7 +159,9 @@ struct SetupView: View {
         case .accessibility:
             Permissions.promptAccessibility()
         case .microphone:
-            Task { _ = await Permissions.requestMicrophone(); refresh() }
+            Task {
+                _ = await Permissions.requestMicrophone(); refresh()
+            }
         case .inputMonitoring:
             Permissions.requestInputMonitoring()
         }

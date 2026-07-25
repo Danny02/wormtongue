@@ -11,7 +11,9 @@ enum Keychain {
 
     static func apiKey() -> String? {
         if let stored = read(), !stored.isEmpty { return stored }
-        if let env = ProcessInfo.processInfo.environment["ANTHROPIC_API_KEY"], !env.isEmpty { return env }
+        if let env = ProcessInfo.processInfo.environment["ANTHROPIC_API_KEY"], !env.isEmpty {
+            return env
+        }
         return nil
     }
 
@@ -27,7 +29,8 @@ enum Keychain {
         ]
         var item: CFTypeRef?
         guard SecItemCopyMatching(query as CFDictionary, &item) == errSecSuccess,
-              let data = item as? Data else { return nil }
+            let data = item as? Data
+        else { return nil }
         return String(data: data, encoding: .utf8)
     }
 

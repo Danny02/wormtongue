@@ -21,7 +21,8 @@ enum Permission: String, CaseIterable, Identifiable {
 
     var why: String {
         switch self {
-        case .accessibility: return "Read the focused app's text field and post the paste keystroke."
+        case .accessibility:
+            return "Read the focused app's text field and post the paste keystroke."
         case .microphone: return "Capture audio while the hotkey is held."
         case .inputMonitoring: return "Detect the global hotkey. Not always required."
         }
@@ -65,7 +66,10 @@ enum Permissions {
     }
 
     static func openSettings(for permission: Permission) {
-        let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?\(permission.settingsAnchor)")
+        let url = URL(
+            string:
+                "x-apple.systempreferences:com.apple.preference.security?\(permission.settingsAnchor)"
+        )
         if let url { NSWorkspace.shared.open(url) }
     }
 

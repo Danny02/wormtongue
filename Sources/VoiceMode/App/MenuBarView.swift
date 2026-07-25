@@ -1,5 +1,6 @@
 import AppKit
 import SwiftUI
+import VoiceModeCore
 
 struct MenuBarView: View {
     @EnvironmentObject private var state: AppState
@@ -8,11 +9,16 @@ struct MenuBarView: View {
     var body: some View {
         Text(state.statusText)
 
-        if !state.modelReady {
-            Text("Whisper model loading…")
-        }
         if let error = state.configError {
             Text(error)
+        }
+
+        switch state.phase {
+        case .recording, .transcribing, .rewriting, .inserting:
+            Button("Cancel") { state.cancel() }
+                .keyboardShortcut(".")
+        default:
+            EmptyView()
         }
 
         Divider()
@@ -31,7 +37,7 @@ struct MenuBarView: View {
         Divider()
 
         Button("Reload Config") { state.reloadConfig() }
-        Button("Open Config File") {
+        Button("Open Config Folder") {
             NSWorkspace.shared.open(ConfigStore.url.deletingLastPathComponent())
         }
         if case .failed = state.phase {

@@ -1,4 +1,5 @@
 import SwiftUI
+import VoiceModeCore
 
 /// Last N dictations, with re-insert and re-run-under-a-different-mode. This is
 /// the debugging surface: it shows what the transcript was, what the LLM did to
@@ -9,9 +10,10 @@ struct HistoryView: View {
     var body: some View {
         Group {
             if state.history.isEmpty {
-                ContentUnavailableView("No dictations yet",
-                                       systemImage: "mic",
-                                       description: Text("Hold the hotkey and speak."))
+                ContentUnavailableView(
+                    "No dictations yet",
+                    systemImage: "mic",
+                    description: Text("Hold the hotkey and speak."))
             } else {
                 List(state.history) { row(for: $0) }
             }

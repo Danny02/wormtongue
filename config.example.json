@@ -31,6 +31,10 @@
 
   "insert_raw_first": false,
 
+  "//ux": "Floating status overlay near the bottom of the screen, and short system sounds on start/insert/failure.",
+  "show_overlay": true,
+  "sound_feedback": true,
+
   "modes": [
     {
       "name": "slack",
