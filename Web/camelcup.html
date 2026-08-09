@@ -1,0 +1,990 @@
+<title>Camel Cup — Würfelsimulator</title>
+<style>
+    /* ---- Tokens --------------------------------------------------------
+       The ground is a cool limestone rather than desert cream: the five camel
+       colours are loud and they are the only saturated things on the page, so
+       everything around them stays quiet. Light is the base set; dark redefines
+       the same tokens twice — once for the un-stamped system default, once for
+       an explicit toggle. */
+    :root {
+        --ground: #eceef1;
+        --surface: #f9fafb;
+        --sunk: #e2e5ea;
+        --line: #ccd1d9;
+        --line-soft: #dde1e7;
+        --ink: #191d26;
+        --ink-muted: #5c6472;
+        --ink-faint: #8a91a0;
+        --pip: #f9fafb;
+        --shadow: 0 1px 0 rgba(25, 29, 38, 0.04), 0 10px 26px -18px rgba(25, 29, 38, 0.55);
+
+        --yellow: #dfa61a;
+        --orange: #d4632a;
+        --white: #ffffff;
+        --green: #2c8a61;
+        --blue: #2f5fb3;
+        /* Ink that sits on each camel colour — the pips on a white die cannot
+           be the same near-white as the pips on a blue one. */
+        --yellow-ink: #2b2205;
+        --orange-ink: #fdf6f1;
+        --white-ink: #3b4250;
+        --green-ink: #f2fbf7;
+        --blue-ink: #f3f6fc;
+
+        --font-display: "Iowan Old Style", "Palatino Linotype", Palatino, "Book Antiqua", Georgia, serif;
+        --font-ui: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+        --font-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+    }
+
+    @media (prefers-color-scheme: dark) {
+        :root:not([data-theme="light"]) {
+            --ground: #12141b;
+            --surface: #1a1e27;
+            --sunk: #0e1017;
+            --line: #2f343f;
+            --line-soft: #242832;
+            --ink: #eef0f4;
+            --ink-muted: #a3aab8;
+            --ink-faint: #737b8a;
+            --pip: #12141b;
+            --shadow: 0 1px 0 rgba(0, 0, 0, 0.35), 0 12px 30px -20px #000;
+
+            --yellow: #f0c33f;
+            --orange: #ef7f43;
+            --white: #e9ebee;
+            --green: #3fb37f;
+            --blue: #5789e0;
+            --yellow-ink: #241c04;
+            --orange-ink: #2a1408;
+            --white-ink: #2a3040;
+            --green-ink: #07251a;
+            --blue-ink: #f3f6fc;
+        }
+    }
+
+    :root[data-theme="dark"] {
+        --ground: #12141b;
+        --surface: #1a1e27;
+        --sunk: #0e1017;
+        --line: #2f343f;
+        --line-soft: #242832;
+        --ink: #eef0f4;
+        --ink-muted: #a3aab8;
+        --ink-faint: #737b8a;
+        --pip: #12141b;
+        --shadow: 0 1px 0 rgba(0, 0, 0, 0.35), 0 12px 30px -20px #000;
+
+        --yellow: #f0c33f;
+        --orange: #ef7f43;
+        --white: #e9ebee;
+        --green: #3fb37f;
+        --blue: #5789e0;
+        --yellow-ink: #241c04;
+        --orange-ink: #2a1408;
+        --white-ink: #2a3040;
+        --green-ink: #07251a;
+        --blue-ink: #f3f6fc;
+    }
+
+    /* ---- Base ---------------------------------------------------------- */
+    * {
+        box-sizing: border-box;
+    }
+
+    body {
+        margin: 0;
+        background: var(--ground);
+        color: var(--ink);
+        font-family: var(--font-ui);
+        font-size: 16px;
+        line-height: 1.5;
+        -webkit-font-smoothing: antialiased;
+    }
+
+    .page {
+        max-width: 980px;
+        margin: 0 auto;
+        padding: clamp(24px, 5vw, 56px) clamp(16px, 4vw, 32px) 64px;
+        display: flex;
+        flex-direction: column;
+        gap: clamp(24px, 4vw, 40px);
+    }
+
+    .eyebrow {
+        font-size: 11px;
+        font-weight: 600;
+        letter-spacing: 0.16em;
+        text-transform: uppercase;
+        color: var(--ink-faint);
+        margin: 0;
+    }
+
+    .masthead {
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+        border-bottom: 1px solid var(--line);
+        padding-bottom: clamp(20px, 3vw, 28px);
+    }
+
+    .masthead h1 {
+        font-family: var(--font-display);
+        font-size: clamp(38px, 7vw, 62px);
+        font-weight: 600;
+        letter-spacing: -0.02em;
+        line-height: 1;
+        margin: 0;
+        text-wrap: balance;
+    }
+
+    .lede {
+        margin: 0;
+        max-width: 62ch;
+        color: var(--ink-muted);
+    }
+
+    .lede b {
+        color: var(--ink);
+        font-weight: 600;
+    }
+
+    /* ---- Layout -------------------------------------------------------- */
+    .board {
+        display: grid;
+        grid-template-columns: minmax(0, 1.05fr) minmax(0, 1fr);
+        gap: clamp(16px, 3vw, 28px);
+        align-items: start;
+    }
+
+    @media (max-width: 760px) {
+        .board {
+            grid-template-columns: minmax(0, 1fr);
+        }
+    }
+
+    .panel {
+        background: var(--surface);
+        border: 1px solid var(--line);
+        border-radius: 4px;
+        box-shadow: var(--shadow);
+        padding: clamp(18px, 3vw, 26px);
+        display: flex;
+        flex-direction: column;
+        gap: 18px;
+    }
+
+    .panel-head {
+        display: flex;
+        align-items: baseline;
+        justify-content: space-between;
+        gap: 12px;
+        border-bottom: 1px solid var(--line-soft);
+        padding-bottom: 12px;
+    }
+
+    .panel-head h2 {
+        font-family: var(--font-display);
+        font-size: 20px;
+        font-weight: 600;
+        margin: 0;
+        letter-spacing: -0.01em;
+    }
+
+    .counter {
+        font-family: var(--font-mono);
+        font-size: 12px;
+        font-variant-numeric: tabular-nums;
+        color: var(--ink-faint);
+    }
+
+    /* ---- The cup ------------------------------------------------------- */
+    .cup {
+        display: flex;
+        gap: 8px;
+    }
+
+    .slot {
+        flex: 1;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 7px;
+        padding: 10px 4px;
+        border: 1px solid var(--line-soft);
+        border-radius: 3px;
+        background: var(--sunk);
+    }
+
+    .slot-chip {
+        width: 100%;
+        height: 8px;
+        border-radius: 999px;
+        background: var(--camel);
+        box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.12);
+    }
+
+    .slot-name {
+        font-size: 10px;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        color: var(--ink-muted);
+        font-variant-numeric: tabular-nums;
+    }
+
+    .slot.is-used {
+        background: transparent;
+        border-style: dashed;
+    }
+
+    .slot.is-used .slot-chip {
+        background: transparent;
+        box-shadow: inset 0 0 0 1px var(--line);
+    }
+
+    .slot.is-used .slot-name {
+        color: var(--ink-faint);
+    }
+
+    /* ---- The die ------------------------------------------------------- */
+    .stage {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 14px;
+        padding: 8px 0 4px;
+    }
+
+    .die {
+        width: 132px;
+        height: 132px;
+        border-radius: 14px;
+        background: var(--camel, var(--sunk));
+        border: 1px solid rgba(0, 0, 0, 0.14);
+        display: grid;
+        grid-template: repeat(3, 1fr) / repeat(3, 1fr);
+        padding: 16px;
+        box-shadow: var(--shadow);
+    }
+
+    .die.is-empty {
+        background: transparent;
+        border: 1px dashed var(--line);
+        box-shadow: none;
+        place-items: center;
+    }
+
+    .die-dot {
+        width: 20px;
+        height: 20px;
+        border-radius: 50%;
+        background: var(--pip);
+        align-self: center;
+        justify-self: center;
+    }
+
+    .die-empty-text {
+        grid-column: 1 / -1;
+        grid-row: 1 / -1;
+        align-self: center;
+        justify-self: center;
+        font-size: 12px;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        color: var(--ink-faint);
+        text-align: center;
+    }
+
+    .die.is-rolling {
+        animation: tumble 0.16s linear infinite;
+    }
+
+    @keyframes tumble {
+        0% {
+            transform: rotate(-4deg) translateY(0);
+        }
+        50% {
+            transform: rotate(4deg) translateY(-6px);
+        }
+        100% {
+            transform: rotate(-4deg) translateY(0);
+        }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+        .die.is-rolling {
+            animation: none;
+        }
+    }
+
+    .verdict {
+        text-align: center;
+        display: flex;
+        flex-direction: column;
+        gap: 2px;
+        min-height: 46px;
+    }
+
+    .verdict-name {
+        font-family: var(--font-display);
+        font-size: 24px;
+        letter-spacing: -0.01em;
+    }
+
+    .verdict-note {
+        font-size: 13px;
+        color: var(--ink-muted);
+    }
+
+    /* ---- Controls ------------------------------------------------------ */
+    .controls {
+        display: flex;
+        gap: 10px;
+    }
+
+    button {
+        font: inherit;
+        font-weight: 600;
+        border-radius: 3px;
+        padding: 12px 18px;
+        cursor: pointer;
+        transition: background-color 0.12s ease, border-color 0.12s ease, color 0.12s ease;
+    }
+
+    button:focus-visible {
+        outline: 2px solid var(--blue);
+        outline-offset: 2px;
+    }
+
+    .btn-primary {
+        flex: 2;
+        border: 1px solid var(--ink);
+        background: var(--ink);
+        color: var(--ground);
+    }
+
+    .btn-primary:hover:not(:disabled) {
+        background: var(--ink-muted);
+        border-color: var(--ink-muted);
+    }
+
+    .btn-secondary {
+        flex: 1;
+        border: 1px solid var(--line);
+        background: transparent;
+        color: var(--ink);
+    }
+
+    .btn-secondary:hover:not(:disabled) {
+        border-color: var(--ink-muted);
+    }
+
+    button:disabled {
+        opacity: 0.4;
+        cursor: not-allowed;
+    }
+
+    .keys {
+        font-size: 12px;
+        color: var(--ink-faint);
+        display: flex;
+        gap: 14px;
+        flex-wrap: wrap;
+    }
+
+    kbd {
+        font-family: var(--font-mono);
+        font-size: 11px;
+        border: 1px solid var(--line);
+        border-bottom-width: 2px;
+        border-radius: 3px;
+        padding: 1px 5px;
+        color: var(--ink-muted);
+    }
+
+    /* ---- Leg log ------------------------------------------------------- */
+    .log {
+        list-style: none;
+        margin: 0;
+        padding: 0;
+        display: flex;
+        flex-direction: column;
+        /* Room for all five rolls from the start, so the panel does not grow
+           row by row while a leg is running. */
+        min-height: 236px;
+    }
+
+    /* display:flex above would otherwise beat the UA's [hidden] rule. */
+    .log[hidden] {
+        display: none;
+    }
+
+    .log li {
+        display: grid;
+        grid-template-columns: 20px 12px 1fr auto;
+        align-items: center;
+        gap: 12px;
+        padding: 11px 2px;
+        border-bottom: 1px solid var(--line-soft);
+    }
+
+    .log li:last-child {
+        border-bottom: 0;
+    }
+
+    .log-index {
+        font-family: var(--font-mono);
+        font-size: 11px;
+        color: var(--ink-faint);
+        font-variant-numeric: tabular-nums;
+    }
+
+    .log-dot {
+        width: 12px;
+        height: 12px;
+        border-radius: 50%;
+        background: var(--camel);
+        box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.28);
+    }
+
+    .log-name {
+        font-weight: 500;
+    }
+
+    .log-pips {
+        font-family: var(--font-mono);
+        font-size: 15px;
+        font-variant-numeric: tabular-nums;
+        color: var(--ink);
+    }
+
+    .log-pips::before {
+        content: "+";
+        color: var(--ink-faint);
+    }
+
+    .empty-note {
+        color: var(--ink-faint);
+        font-size: 14px;
+        margin: 0;
+        padding: 12px 2px;
+    }
+
+    .leg-done {
+        border: 1px solid var(--line);
+        border-radius: 3px;
+        background: var(--sunk);
+        padding: 12px 14px;
+        font-size: 13px;
+        color: var(--ink-muted);
+    }
+
+    .leg-done b {
+        color: var(--ink);
+    }
+
+    /* ---- Standings ----------------------------------------------------- */
+    .standings {
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+    }
+
+    .bar-row {
+        display: grid;
+        grid-template-columns: 62px minmax(0, 1fr) 34px;
+        align-items: center;
+        gap: 12px;
+    }
+
+    .bar-name {
+        font-size: 12px;
+        letter-spacing: 0.06em;
+        text-transform: uppercase;
+        color: var(--ink-muted);
+    }
+
+    .bar-track {
+        display: block;
+        height: 12px;
+        background: var(--sunk);
+        border-radius: 2px;
+        overflow: hidden;
+    }
+
+    .bar-fill {
+        display: block;
+        height: 100%;
+        background: var(--camel);
+        border-radius: 2px;
+        transition: width 0.35s cubic-bezier(0.2, 0.7, 0.3, 1);
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+        .bar-fill {
+            transition: none;
+        }
+    }
+
+    .bar-value {
+        font-family: var(--font-mono);
+        font-size: 13px;
+        font-variant-numeric: tabular-nums;
+        text-align: right;
+        color: var(--ink);
+    }
+
+    .history {
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+        max-height: 220px;
+        overflow-y: auto;
+    }
+
+    .history-row {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        font-size: 12px;
+    }
+
+    .history-label {
+        font-family: var(--font-mono);
+        font-size: 11px;
+        color: var(--ink-faint);
+        width: 62px;
+        flex: none;
+        font-variant-numeric: tabular-nums;
+    }
+
+    .history-chip {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 22px;
+        height: 22px;
+        border-radius: 3px;
+        background: var(--camel);
+        color: var(--pip);
+        font-family: var(--font-mono);
+        font-size: 12px;
+        font-weight: 600;
+        box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.16);
+    }
+
+    footer {
+        color: var(--ink-faint);
+        font-size: 13px;
+        border-top: 1px solid var(--line);
+        padding-top: 20px;
+    }
+
+    footer code {
+        font-family: var(--font-mono);
+        font-size: 12px;
+        color: var(--ink-muted);
+    }
+
+    .sr-only {
+        position: absolute;
+        width: 1px;
+        height: 1px;
+        overflow: hidden;
+        clip: rect(0 0 0 0);
+        white-space: nowrap;
+    }
+</style>
+
+<div class="page">
+    <header class="masthead">
+        <p class="eyebrow">Würfelsimulator</p>
+        <h1>Camel Cup</h1>
+        <p class="lede">
+            Fünf Würfel, einer je Kamel, Augen 1 bis 3. Es kommt immer nur
+            <b>ein</b> Würfel heraus, und eine gewürfelte Farbe kehrt erst zurück,
+            wenn die Pyramide neu gefüllt wird — deshalb weiß man am Ende einer
+            Etappe genau, wer noch dran ist.
+        </p>
+    </header>
+
+    <div class="board">
+        <section class="panel" aria-labelledby="cup-title">
+            <div class="panel-head">
+                <h2 id="cup-title">Pyramide</h2>
+                <span class="counter" id="cup-counter">5 von 5 im Becher</span>
+            </div>
+
+            <div class="cup" id="cup"></div>
+
+            <div class="stage">
+                <div class="die is-empty" id="die" aria-hidden="true">
+                    <span class="die-empty-text">bereit</span>
+                </div>
+                <p class="verdict">
+                    <span class="verdict-name" id="verdict-name">&nbsp;</span>
+                    <span class="verdict-note" id="verdict-note">Würfeln, um die Etappe zu starten.</span>
+                </p>
+            </div>
+
+            <div class="controls">
+                <button class="btn-primary" id="roll" type="button">Würfeln</button>
+                <button class="btn-secondary" id="refill" type="button" disabled>Neu füllen</button>
+            </div>
+
+            <p class="keys">
+                <span><kbd>Leertaste</kbd> würfeln</span>
+                <span><kbd>N</kbd> neu füllen</span>
+                <span><kbd>Z</kbd> alles zurücksetzen</span>
+            </p>
+        </section>
+
+        <section class="panel" aria-labelledby="leg-title">
+            <div class="panel-head">
+                <h2 id="leg-title">Etappe <span id="leg-number">1</span></h2>
+                <span class="counter" id="leg-counter">0 von 5 gewürfelt</span>
+            </div>
+
+            <p class="empty-note" id="log-empty">Noch kein Würfel aus der Pyramide.</p>
+            <ol class="log" id="log"></ol>
+            <p class="leg-done" id="leg-done" hidden>
+                <b>Etappe vorbei.</b> Alle fünf Würfel sind verbraucht — neu füllen
+                für die nächste Etappe.
+            </p>
+        </section>
+    </div>
+
+    <section class="panel" aria-labelledby="standings-title">
+        <div class="panel-head">
+            <h2 id="standings-title">Gelaufene Felder</h2>
+            <span class="counter" id="legs-done">0 Etappen fertig</span>
+        </div>
+
+        <div class="standings" id="standings"></div>
+
+        <div class="panel-head" style="border-bottom: 0; padding-bottom: 0">
+            <h2>Bisherige Etappen</h2>
+        </div>
+        <div class="history" id="history">
+            <p class="empty-note">Noch keine abgeschlossene Etappe.</p>
+        </div>
+    </section>
+
+    <footer>
+        Die Reihenfolge ist der Bewegungsablauf der Etappe: von oben nach unten
+        abarbeiten. Der Simulator zieht gleichverteilt aus den verbliebenen
+        Würfeln — dieselbe Logik wie <code>DiceCup</code> im Repo.
+    </footer>
+</div>
+
+<p class="sr-only" id="announcer" role="status" aria-live="polite"></p>
+
+<script>
+    "use strict";
+
+    const CAMELS = [
+        { id: "yellow", name: "Gelb", color: "var(--yellow)", ink: "var(--yellow-ink)" },
+        { id: "orange", name: "Orange", color: "var(--orange)", ink: "var(--orange-ink)" },
+        { id: "white", name: "Weiß", color: "var(--white)", ink: "var(--white-ink)" },
+        { id: "green", name: "Grün", color: "var(--green)", ink: "var(--green-ink)" },
+        { id: "blue", name: "Blau", color: "var(--blue)", ink: "var(--blue-ink)" },
+    ];
+
+    // Pip positions on a 3×3 face, as [column, row].
+    const PIPS = {
+        1: [[2, 2]],
+        2: [[1, 1], [3, 3]],
+        3: [[1, 1], [2, 2], [3, 3]],
+    };
+
+    const byId = (id) => document.getElementById(id);
+    const el = {
+        cup: byId("cup"),
+        cupCounter: byId("cup-counter"),
+        die: byId("die"),
+        verdictName: byId("verdict-name"),
+        verdictNote: byId("verdict-note"),
+        roll: byId("roll"),
+        refill: byId("refill"),
+        legNumber: byId("leg-number"),
+        legCounter: byId("leg-counter"),
+        log: byId("log"),
+        logEmpty: byId("log-empty"),
+        legDone: byId("leg-done"),
+        standings: byId("standings"),
+        legsDone: byId("legs-done"),
+        history: byId("history"),
+        announcer: byId("announcer"),
+    };
+
+    const state = {
+        cup: CAMELS.map((camel) => camel.id),
+        leg: 1,
+        rolls: [],
+        history: [],
+        totals: Object.fromEntries(CAMELS.map((camel) => [camel.id, 0])),
+        rolling: false,
+    };
+
+    const camelById = (id) => CAMELS.find((camel) => camel.id === id);
+    const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
+
+    /* ---- The cup: one die per colour, drawn without replacement ---------- */
+    function drawDie() {
+        if (state.cup.length === 0) return null;
+        const index = Math.floor(Math.random() * state.cup.length);
+        const [id] = state.cup.splice(index, 1);
+        return { id, pips: 1 + Math.floor(Math.random() * 3) };
+    }
+
+    function refill() {
+        if (state.rolls.length > 0) {
+            state.history.unshift({ leg: state.leg, rolls: state.rolls });
+            state.leg += 1;
+        }
+        state.cup = CAMELS.map((camel) => camel.id);
+        state.rolls = [];
+        el.verdictNote.textContent = "Pyramide neu gefüllt: fünf Würfel.";
+        el.verdictName.innerHTML = "&nbsp;";
+        renderDie(null);
+        render();
+        announce("Pyramide neu gefüllt, fünf Würfel im Becher.");
+    }
+
+    function reset() {
+        state.cup = CAMELS.map((camel) => camel.id);
+        state.leg = 1;
+        state.rolls = [];
+        state.history = [];
+        state.totals = Object.fromEntries(CAMELS.map((camel) => [camel.id, 0]));
+        el.verdictName.innerHTML = "&nbsp;";
+        el.verdictNote.textContent = "Würfeln, um die Etappe zu starten.";
+        renderDie(null);
+        render();
+        announce("Alles zurückgesetzt.");
+    }
+
+    function rollOnce() {
+        if (state.rolling || state.cup.length === 0) return;
+        const result = drawDie();
+        if (!result) return;
+
+        state.rolling = true;
+        el.roll.disabled = true;
+        el.refill.disabled = true;
+
+        const settle = () => {
+            state.rolling = false;
+            el.die.classList.remove("is-rolling");
+            state.rolls.push(result);
+            state.totals[result.id] += result.pips;
+
+            const camel = camelById(result.id);
+            renderDie(result);
+            el.verdictName.textContent = `${camel.name} ${result.pips}`;
+            el.verdictNote.textContent =
+                state.cup.length === 0
+                    ? "Letzter Würfel — die Etappe ist vorbei."
+                    : `${camel.name} zieht ${result.pips} ${result.pips === 1 ? "Feld" : "Felder"} vor.`;
+            render();
+            announce(`${camel.name} ${result.pips}. Noch ${state.cup.length} im Becher.`);
+        };
+
+        if (reducedMotion.matches) {
+            settle();
+            return;
+        }
+
+        // Tumble through faces the cup could plausibly have produced, then land.
+        el.die.classList.add("is-rolling");
+        const candidates = state.cup.concat(result.id);
+        const flicker = window.setInterval(() => {
+            renderDie({
+                id: candidates[Math.floor(Math.random() * candidates.length)],
+                pips: 1 + Math.floor(Math.random() * 3),
+            });
+        }, 70);
+        window.setTimeout(() => {
+            window.clearInterval(flicker);
+            settle();
+        }, 480);
+    }
+
+    /* ---- Rendering ------------------------------------------------------ */
+    function renderDie(result) {
+        el.die.innerHTML = "";
+        if (!result) {
+            el.die.classList.add("is-empty");
+            el.die.style.removeProperty("--camel");
+            const text = document.createElement("span");
+            text.className = "die-empty-text";
+            text.textContent = state.cup.length === 0 ? "leer" : "bereit";
+            el.die.append(text);
+            return;
+        }
+        el.die.classList.remove("is-empty");
+        const camel = camelById(result.id);
+        el.die.style.setProperty("--camel", camel.color);
+        el.die.style.setProperty("--pip", camel.ink);
+        for (const [column, row] of PIPS[result.pips]) {
+            const dot = document.createElement("span");
+            dot.className = "die-dot";
+            dot.style.gridColumn = String(column);
+            dot.style.gridRow = String(row);
+            el.die.append(dot);
+        }
+    }
+
+    function renderCup() {
+        el.cup.innerHTML = "";
+        for (const camel of CAMELS) {
+            const used = !state.cup.includes(camel.id);
+            const slot = document.createElement("div");
+            slot.className = used ? "slot is-used" : "slot";
+            slot.style.setProperty("--camel", camel.color);
+
+            const chip = document.createElement("span");
+            chip.className = "slot-chip";
+
+            const name = document.createElement("span");
+            name.className = "slot-name";
+            name.textContent = camel.name;
+
+            slot.append(chip, name);
+            el.cup.append(slot);
+        }
+        el.cupCounter.textContent = `${state.cup.length} von 5 im Becher`;
+    }
+
+    function renderLog() {
+        el.log.innerHTML = "";
+        for (const [index, roll] of state.rolls.entries()) {
+            const camel = camelById(roll.id);
+            const row = document.createElement("li");
+            row.style.setProperty("--camel", camel.color);
+
+            const position = document.createElement("span");
+            position.className = "log-index";
+            position.textContent = String(index + 1);
+
+            const dot = document.createElement("span");
+            dot.className = "log-dot";
+
+            const name = document.createElement("span");
+            name.className = "log-name";
+            name.textContent = camel.name;
+
+            const pips = document.createElement("span");
+            pips.className = "log-pips";
+            pips.textContent = String(roll.pips);
+
+            row.append(position, dot, name, pips);
+            el.log.append(row);
+        }
+
+        el.logEmpty.hidden = state.rolls.length > 0;
+        el.log.hidden = state.rolls.length === 0 && state.history.length === 0;
+        el.legNumber.textContent = String(state.leg);
+        el.legCounter.textContent = `${state.rolls.length} von 5 gewürfelt`;
+        el.legDone.hidden = state.cup.length > 0;
+    }
+
+    function renderStandings() {
+        const values = Object.values(state.totals);
+        const leader = Math.max(1, ...values);
+        el.standings.innerHTML = "";
+
+        for (const camel of CAMELS) {
+            const total = state.totals[camel.id];
+            const row = document.createElement("div");
+            row.className = "bar-row";
+            row.style.setProperty("--camel", camel.color);
+
+            const name = document.createElement("span");
+            name.className = "bar-name";
+            name.textContent = camel.name;
+
+            const track = document.createElement("span");
+            track.className = "bar-track";
+            const fill = document.createElement("span");
+            fill.className = "bar-fill";
+            fill.style.width = `${(total / leader) * 100}%`;
+            track.append(fill);
+
+            const value = document.createElement("span");
+            value.className = "bar-value";
+            value.textContent = String(total);
+
+            row.append(name, track, value);
+            el.standings.append(row);
+        }
+
+        el.legsDone.textContent = `${state.history.length} ${state.history.length === 1 ? "Etappe" : "Etappen"} fertig`;
+    }
+
+    function renderHistory() {
+        el.history.innerHTML = "";
+        if (state.history.length === 0) {
+            const note = document.createElement("p");
+            note.className = "empty-note";
+            note.textContent = "Noch keine abgeschlossene Etappe.";
+            el.history.append(note);
+            return;
+        }
+
+        for (const entry of state.history) {
+            const row = document.createElement("div");
+            row.className = "history-row";
+
+            const label = document.createElement("span");
+            label.className = "history-label";
+            label.textContent = `Etappe ${entry.leg}`;
+            row.append(label);
+
+            for (const roll of entry.rolls) {
+                const camel = camelById(roll.id);
+                const chip = document.createElement("span");
+                chip.className = "history-chip";
+                chip.style.setProperty("--camel", camel.color);
+                chip.style.setProperty("--pip", camel.ink);
+                chip.textContent = String(roll.pips);
+                chip.title = `${camel.name} ${roll.pips}`;
+                row.append(chip);
+            }
+            el.history.append(row);
+        }
+    }
+
+    function render() {
+        renderCup();
+        renderLog();
+        renderStandings();
+        renderHistory();
+        el.roll.disabled = state.cup.length === 0;
+        el.refill.disabled = state.rolls.length === 0;
+    }
+
+    function announce(message) {
+        el.announcer.textContent = message;
+    }
+
+    /* ---- Wiring --------------------------------------------------------- */
+    el.roll.addEventListener("click", rollOnce);
+    el.refill.addEventListener("click", refill);
+
+    document.addEventListener("keydown", (event) => {
+        if (event.metaKey || event.ctrlKey || event.altKey) return;
+        const key = event.key.toLowerCase();
+        if (key === " " || key === "spacebar") {
+            event.preventDefault();
+            if (state.cup.length === 0) refill();
+            else rollOnce();
+        } else if (key === "n") {
+            refill();
+        } else if (key === "z") {
+            reset();
+        }
+    });
+
+    renderDie(null);
+    render();
+</script>
