@@ -8,6 +8,9 @@ import PackageDescription
 //                   privacy policy, prompt assembly, the context tail buffer,
 //                   and Anthropic request/response coding. Has tests.
 //   VoiceMode     — the app. AppKit, Accessibility, AVFoundation, WhisperKit.
+//   CamelCup      — Foundation only. The Camel Cup dice cup, plus the `camelcup`
+//                   command line simulator. Unrelated to dictation; it builds
+//                   and tests anywhere.
 //
 // The macOS target and its dependencies are declared only when the manifest is
 // evaluated on macOS. Package.swift is ordinary Swift code, so on Linux the
@@ -47,5 +50,9 @@ let package = Package(
     targets: [
         .target(name: "VoiceModeCore"),
         .testTarget(name: "VoiceModeCoreTests", dependencies: ["VoiceModeCore"]),
+        // Camel Cup dice: Foundation only, independent of the dictation app.
+        .target(name: "CamelCup"),
+        .executableTarget(name: "camelcup", dependencies: ["CamelCup"]),
+        .testTarget(name: "CamelCupTests", dependencies: ["CamelCup"]),
     ] + platformTargets
 )

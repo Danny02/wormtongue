@@ -57,6 +57,7 @@ The package is split so most of the logic can be verified without a Mac:
 |---|---|---|
 | `VoiceModeCore` | Config decoding, mode resolution, privacy policy, prompt assembly, edit-intent resolution, endpoint parsing, context tail buffer, Anthropic request/response coding | **Yes** — builds and has 108 tests |
 | `VoiceMode` | AppKit, Accessibility, AVFoundation, WhisperKit, SwiftUI | No — needs the macOS SDK |
+| `CamelCup` | The Camel Cup dice cup and its `camelcup` CLI | **Yes** — Foundation only |
 
 `Package.swift` declares the macOS target and its dependencies inside
 `#if os(macOS)`, so on Linux the graph collapses to Core plus tests with no
@@ -267,8 +268,38 @@ Sources/VoiceMode/
   Insert/         TextInserter — AX selected-text, falling back to ⌘V
   Support/        Permissions, Hotkey, ConfigStore, Feedback, Log
 Tests/VoiceModeCoreTests/    108 tests
+Sources/CamelCup/            Camel Cup dice — unrelated to dictation, see below
+Sources/camelcup/            its command line simulator
+Tests/CamelCupTests/
 Resources/Info.plist
 Scripts/bundle.sh, Scripts/check.sh
+```
+
+## Camel Cup dice
+
+A side module, sharing nothing with the dictation app but the repo: the dice
+pyramid from Camel Cup. Five dice, one per camel colour — gelb, orange, weiß,
+grün, blau — each showing 1, 2, or 3. One die comes out at a time and does not
+return until the cup is refilled, which is why the last camel of a leg is
+predictable and the game works at all. `DiceCup` therefore tracks *which*
+colours are still inside, and `roll` returns `nil` once all five are used —
+that's the end of the leg, not an error.
+
+```swift
+var cup = DiceCup()
+while let roll = cup.roll() {
+    print(roll.color, roll.pips)  // e.g. blue 2
+}
+cup.refill()                       // next leg
+```
+
+Randomness is injected (`roll(using:)`), so a run can be replayed from a seed
+with `SeededGenerator` — that's what the tests assert on.
+
+```sh
+swift run camelcup              # Enter rolls the next die, "r" refills, "q" quits
+swift run camelcup --legs 3     # roll three whole legs and exit
+swift run camelcup --seed 42    # reproducible
 ```
 
 ## Known gaps and caveats
