@@ -2,7 +2,17 @@
   "model": "claude-haiku-4-5-20251001",
   "max_tokens": 1024,
 
-  "//endpoint": "Base URL for the Messages API. Point at a gateway, a proxy, or a local mock — the wire format is unchanged. Extra headers are for gateways that need their own auth; the Keychain API key always wins over anything set here.",
+  "//provider": "Which AI provider drives the rewrite pass: \"anthropic\" (API key), \"openai_compatible\" (presets + custom URL), \"claude_subscription\", or \"codex_subscription\". One is active globally; a mode may still override the model string.",
+  "provider": "anthropic",
+  "//providers": "Per-provider settings. API keys are never stored here — they live in the Keychain. openai_compatible accepts a \"preset\" (openRouter/deepSeek/groq/xAI/custom), a \"base_url\" (for custom), and a model; the subscription providers only accept an optional model override (their login is the CLI's own).",
+  "providers": {
+    "anthropic": {},
+    "openai_compatible": { "preset": "openRouter" },
+    "claude_subscription": {},
+    "codex_subscription": {}
+  },
+
+  "//endpoint": "Legacy Anthropic base URL, kept for pre-provider configs. The active provider's per-provider \"base_url\" wins when both are set.",
   "api_base_url": "https://api.anthropic.com",
   "api_headers": {},
 

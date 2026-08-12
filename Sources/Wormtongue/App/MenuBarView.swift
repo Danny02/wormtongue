@@ -8,6 +8,9 @@ struct MenuBarView: View {
 
     var body: some View {
         Text(state.statusText)
+        Text("Rewrite provider: \(state.config.provider.displayName)")
+            .font(.caption)
+            .foregroundStyle(.secondary)
 
         if let error = state.configError {
             Text(error)

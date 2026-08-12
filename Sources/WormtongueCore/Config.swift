@@ -58,11 +58,21 @@ public enum HotkeyMode: String, Codable, Sendable, Equatable {
 public struct Config: Codable, Sendable, Equatable {
     // MARK: Rewrite pass
 
+    /// The provider that drives the rewrite pass, chosen globally.
+    public var provider: ProviderKind
+    /// Per-provider settings. Keyed providers hold a base URL/preset and optional
+    /// model; API keys stay in the Keychain and never appear here. Subscription
+    /// providers hold only an optional model override.
+    public var providers: [ProviderKind: ProviderSettings]
+
+    /// Global model string, retained for backward compatibility and as the default
+    /// for the active provider. Resolution per utterance: `mode.model` > the active
+    /// provider's `model` > this > the provider's own default.
     public var model: String
     public var maxTokens: Int
-    /// Base URL for the Messages API. Point this at a gateway, a proxy, or a local
-    /// mock; the wire format is unchanged. An invalid value falls back to
-    /// Anthropic's host and is reported.
+    /// Legacy base URL for the Anthropic Messages API. Kept decoding so pre-provider
+    /// configs load untouched, and reconciled into the Anthropic-keyed provider's
+    /// settings (see `init(from:)`). Point it at a gateway, a proxy, or a local mock.
     public var apiBaseURL: String
     /// Extra request headers, for gateways that need their own auth. Applied first,
     /// so the built-in `x-api-key` and `anthropic-version` always win — the key
@@ -117,6 +127,8 @@ public struct Config: Codable, Sendable, Equatable {
     public var modes: [Mode]
 
     public static let fallback = Config(
+        provider: .anthropicKeyed,
+        providers: [.anthropicKeyed: .anthropic],
         model: "claude-haiku-4-5-20251001",
         maxTokens: 1024,
         apiBaseURL: "https://api.anthropic.com",
@@ -149,7 +161,7 @@ public struct Config: Codable, Sendable, Equatable {
     /// inverse of `.convertToSnakeCase` for names containing acronyms: it turns
     /// `api_base_url` into `apiBaseUrl`, missing `apiBaseURL` entirely.
     enum CodingKeys: String, CodingKey {
-        case model, dictionary, modes
+        case provider, providers, model, dictionary, modes
         case maxTokens = "max_tokens"
         case apiBaseURL = "api_base_url"
         case apiHeaders = "api_headers"
@@ -169,11 +181,26 @@ public struct Config: Codable, Sendable, Equatable {
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         let d = Config.fallback
-        model = try c.decodeIfPresent(String.self, forKey: .model) ?? d.model
+        // A missing or unknown provider falls back to the keyed Anthropic default
+        // rather than refusing to start.
+        provider = (try? c.decodeIfPresent(ProviderKind.self, forKey: .provider)) ?? d.provider
         maxTokens = try c.decodeIfPresent(Int.self, forKey: .maxTokens) ?? d.maxTokens
         apiBaseURL = try c.decodeIfPresent(String.self, forKey: .apiBaseURL) ?? d.apiBaseURL
         apiHeaders =
             try c.decodeIfPresent([String: String].self, forKey: .apiHeaders) ?? d.apiHeaders
+
+        // The per-provider block is decoded tolerantly: an unknown provider key (a
+        // future addition) or a bad value in one provider must not brick loading.
+        let rawProviders = try? c.decodeIfPresent(
+            [String: ProviderSettings].self, forKey: .providers)
+        var decodedProviders: [ProviderKind: ProviderSettings] = [:]
+        for (key, settings) in rawProviders ?? [:] {
+            guard let kind = ProviderKind(rawValue: key) else { continue }
+            decodedProviders[kind] = settings
+        }
+        providers = decodedProviders
+
+        model = try c.decodeIfPresent(String.self, forKey: .model) ?? d.model
         whisperModel = try c.decodeIfPresent(String.self, forKey: .whisperModel) ?? d.whisperModel
         // Absent means auto-detect, so there is no fallback to apply here.
         whisperLanguage = try c.decodeIfPresent(String.self, forKey: .whisperLanguage)
@@ -201,6 +228,8 @@ public struct Config: Codable, Sendable, Equatable {
     }
 
     public init(
+        provider: ProviderKind = .anthropicKeyed,
+        providers: [ProviderKind: ProviderSettings] = [:],
         model: String,
         maxTokens: Int,
         apiBaseURL: String,
@@ -219,6 +248,8 @@ public struct Config: Codable, Sendable, Equatable {
         soundFeedback: Bool,
         modes: [Mode]
     ) {
+        self.provider = provider
+        self.providers = providers
         self.model = model
         self.maxTokens = maxTokens
         self.apiBaseURL = apiBaseURL
@@ -238,8 +269,88 @@ public struct Config: Codable, Sendable, Equatable {
         self.modes = modes
     }
 
-    /// The parsed endpoint, or nil when `apiBaseURL` is unusable.
-    public var endpoint: APIEndpoint? { APIEndpoint(base: apiBaseURL) }
+    /// The Anthropic-keyed provider's settings, reconciled with the legacy flat
+    /// `api_base_url` field so pre-provider configs keep working untouched.
+    ///
+    /// An explicit per-provider base URL wins; otherwise the legacy `api_base_url`
+    /// (if any) fills the gap. Kept computed rather than folded into `providers` on
+    /// decode so encoding never rewrites a config the user did not touch.
+    public var anthropicSettings: ProviderSettings {
+        var settings = providers[.anthropicKeyed] ?? ProviderSettings()
+        if settings.baseURL == nil, !apiBaseURL.isEmpty {
+            settings.baseURL = apiBaseURL
+        }
+        return settings
+    }
+
+    /// The per-provider settings of the active provider, including the legacy
+    /// reconciliation when the active provider is keyed Anthropic.
+    public var activeProviderSettings: ProviderSettings {
+        if provider == .anthropicKeyed { return anthropicSettings }
+        return providers[provider] ?? ProviderSettings()
+    }
+
+    /// The base URL string the active *keyed* provider resolves to: its explicit
+    /// setting, else its preset's host, else the provider's default. nil for
+    /// subscription providers (no HTTP endpoint).
+    public var activeProviderBaseURL: String? {
+        guard provider.isKeyed else { return nil }
+        let settings = activeProviderSettings
+        if let b = settings.baseURL, !b.isEmpty { return b }
+        if let preset = settings.preset, let u = preset.baseURL { return u }
+        return provider.defaultBaseURL
+    }
+
+    /// The parsed endpoint of the active keyed provider, or nil when that provider
+    /// is a subscription CLI or its base URL is unusable.
+    public var endpoint: APIEndpoint? {
+        guard let base = activeProviderBaseURL else { return nil }
+        return APIEndpoint(base: base)
+    }
+
+    /// The model string the rewrite pass sends, in the active provider's grammar.
+    ///
+    /// Precedence: the mode's own `model` override, then the active provider's
+    /// settings `model`, then the global `model`, then the provider's (or preset
+    /// default) model. The mode override keeps working exactly as before; the
+    /// global model is retained as the ordinary default.
+    public func resolvedModel(for mode: Mode?) -> String {
+        if let mode, let m = mode.model, !m.isEmpty { return m }
+        let settings = activeProviderSettings
+        if let m = settings.model, !m.isEmpty { return m }
+        if !model.isEmpty { return model }
+        return provider.defaultModel(settings: settings)
+    }
+
+    // MARK: - Encode
+
+    /// Full encode. `providers` must escape as a JSON *object* keyed by the
+    /// provider's raw value (`{ "anthropic": {…}, "openai_compatible": {…} }`),
+    /// not the array JSONEncoder synthesizes for enum-keyed dictionaries.
+    public func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(provider, forKey: .provider)
+        let providersByRawValue = Dictionary(
+            uniqueKeysWithValues: providers.map { ($0.key.rawValue, $0.value) })
+        try c.encode(providersByRawValue, forKey: .providers)
+        try c.encode(model, forKey: .model)
+        try c.encode(maxTokens, forKey: .maxTokens)
+        try c.encode(apiBaseURL, forKey: .apiBaseURL)
+        try c.encode(apiHeaders, forKey: .apiHeaders)
+        try c.encode(whisperModel, forKey: .whisperModel)
+        try c.encodeIfPresent(whisperLanguage, forKey: .whisperLanguage)
+        try c.encode(contextCharCap, forKey: .contextCharCap)
+        try c.encode(fieldCharCap, forKey: .fieldCharCap)
+        try c.encode(dictionary, forKey: .dictionary)
+        try c.encode(editOptInBundleIds, forKey: .editOptInBundleIds)
+        try c.encode(contextOptInBundleIds, forKey: .contextOptInBundleIds)
+        try c.encode(deniedBundleIds, forKey: .deniedBundleIds)
+        try c.encode(hotkeyMode, forKey: .hotkeyMode)
+        try c.encode(insertRawFirst, forKey: .insertRawFirst)
+        try c.encode(showOverlay, forKey: .showOverlay)
+        try c.encode(soundFeedback, forKey: .soundFeedback)
+        try c.encode(modes, forKey: .modes)
+    }
 
     // MARK: - Coding
 
@@ -258,6 +369,8 @@ extension Config {
     /// What lands on disk the first time the app runs — the modes from §5 of the
     /// brief, with every opt-in list empty so nothing is sent until the user says so.
     public static let seed = Config(
+        provider: .anthropicKeyed,
+        providers: [.anthropicKeyed: .anthropic],
         model: "claude-haiku-4-5-20251001",
         maxTokens: 1024,
         apiBaseURL: "https://api.anthropic.com",

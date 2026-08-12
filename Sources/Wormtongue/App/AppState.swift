@@ -101,10 +101,17 @@ final class AppState: ObservableObject {
     private let contextProbe = ContextProbe()
     private let inserter = TextInserter()
     private let anthropic = AnthropicClient()
-    /// The pipeline's view of the rewrite provider: the interface, never the
-    /// concrete adapter. Lifecycle concerns (config, warm-up, health) stay on the
-    /// concrete type until provider selection is built.
-    private var provider: any LLMProvider { anthropic }
+
+    /// The pipeline's view of the rewrite provider: the interface, never a concrete
+    /// adapter. Only the Anthropic-keyed adapter exists in this build, so any other
+    /// active provider throws an honest `ProviderError.adapterUnavailable` rather
+    /// than faking a success.
+    private func activeLLMProvider() throws -> any LLMProvider {
+        guard config.provider.adapterAvailable else {
+            throw ProviderError.adapterUnavailable(config.provider)
+        }
+        return anthropic
+    }
     private let overlay = OverlayController()
 
     /// Rebuilt only when the config changes — it precompiles regexes and builds
@@ -183,11 +190,43 @@ final class AppState: ObservableObject {
         Task { await prewarmModel() }
     }
 
-    /// Probes the configured endpoint with the stored key and returns nil on
-    /// success, or a reason it failed. Used by the Setup health check.
+    /// Verifies the active provider's readiness. For the keyed Anthropic provider
+    /// this is a real one-token call against the endpoint; for the others it is the
+    /// local diagnostics (key/base presence, CLI install + login) plus an honest
+    /// note that the adapter is not wired yet.
     @MainActor
-    func checkHealth() async -> String? {
-        await anthropic.healthCheck()
+    func checkHealth() async -> ProviderStatus {
+        var result = ProviderDiagnostics.status(
+            provider: config.provider, settings: config.activeProviderSettings)
+        if config.provider == .anthropicKeyed {
+            if let reason = await anthropic.healthCheck() {
+                result.headline = reason
+                result.symbol = "exclamationmark.triangle"
+            } else {
+                result.headline = "Ready — endpoint and key verified"
+                result.symbol = "checkmark.circle"
+            }
+        }
+        return result
+    }
+
+    /// Persists the global provider selection and reloads.
+    @MainActor
+    func setProvider(_ kind: ProviderKind) {
+        guard config.provider != kind else { return }
+        ConfigStore.write { $0.provider = kind }
+        reloadConfig()
+    }
+
+    /// Persists a mutation of one provider's settings and reloads.
+    @MainActor
+    func updateProviderSettings(_ kind: ProviderKind, _ edit: (inout ProviderSettings) -> Void) {
+        ConfigStore.write { config in
+            var settings = config.providers[kind] ?? ProviderSettings()
+            edit(&settings)
+            config.providers[kind] = settings
+        }
+        reloadConfig()
     }
 
     /// Persists a new rewrite model id and reloads.
@@ -207,15 +246,23 @@ final class AppState: ObservableObject {
         var problems: [String] = []
         if let error { problems.append(error) }
 
-        // A bad base URL falls back rather than bricking the rewrite pass.
-        let endpoint = loaded.endpoint ?? .anthropic
-        if loaded.endpoint == nil {
+        // The active keyed provider's endpoint drives the Anthropic client (the only
+        // adapter in this build). A base URL that fails to parse falls back and is
+        // reported. Subscription providers have no HTTP endpoint.
+        let activeBase = loaded.activeProviderBaseURL
+        let parsedEndpoint = activeBase.flatMap(APIEndpoint.init(base:))
+        let endpoint = parsedEndpoint ?? .anthropic
+        if let activeBase, parsedEndpoint == nil, loaded.provider.isKeyed {
             problems.append(
-                "api_base_url is not a usable http(s) URL, using \(APIEndpoint.anthropic.base.absoluteString) — \(loaded.apiBaseURL)"
+                "The \(loaded.provider.displayName) base URL is not a usable http(s) URL, using \(APIEndpoint.anthropic.base.absoluteString) — \(activeBase)"
             )
         }
         let headers = loaded.apiHeaders
-        Task { [anthropic] in await anthropic.configure(endpoint: endpoint, headers: headers) }
+        if loaded.provider == .anthropicKeyed {
+            Task { [anthropic] in
+                await anthropic.configure(endpoint: endpoint, headers: headers)
+            }
+        }
         activeEndpoint = endpoint
         let badPatterns = resolver.invalidTitlePatterns
         if !badPatterns.isEmpty {
@@ -228,7 +275,8 @@ final class AppState: ObservableObject {
     func prewarmModel() async {
         // A first download is minutes long and otherwise looks like a hang, so it
         // gets the overlay too, not just the menu.
-        modelStage = await transcriber.isDownloaded(model: config.whisperModel) ? .loading : .downloading
+        modelStage =
+            await transcriber.isDownloaded(model: config.whisperModel) ? .loading : .downloading
         if modelStage == .downloading, case .idle = phase { showOverlayIfEnabled() }
         defer {
             modelStage = nil
@@ -317,7 +365,7 @@ final class AppState: ObservableObject {
         }
 
         // Same idea for the TLS handshake to the API.
-        if policy.llmAllowed {
+        if policy.llmAllowed, config.provider == .anthropicKeyed {
             Task { [anthropic] in await anthropic.warmConnection() }
         }
     }
@@ -457,6 +505,7 @@ final class AppState: ObservableObject {
             intent: intent)
         let result: LLMResult
         do {
+            let provider = try activeLLMProvider()
             result = try await LLMPipeline.run(provider: provider, prompt: prompt)
             watch.lap("llm")
         } catch {
@@ -523,7 +572,7 @@ final class AppState: ObservableObject {
         mode: Mode, transcript: String, context: FieldContext, policy: Policy, intent: EditIntent
     ) -> LLMPrompt {
         LLMPrompt(
-            model: mode.model ?? config.model,
+            model: config.resolvedModel(for: mode),
             system: resolver.systemPrompt(for: mode, intent: intent),
             user: resolver.userMessage(
                 transcript: transcript, context: context, policy: policy, intent: intent),
@@ -673,7 +722,8 @@ final class AppState: ObservableObject {
                 let prompt = makePrompt(
                     mode: mode, transcript: dictation.raw, context: dictation.context,
                     policy: policy, intent: .compose)
-                let result = try await LLMPipeline.run(provider: provider, prompt: prompt)
+                let result = try await LLMPipeline.run(
+                    provider: try activeLLMProvider(), prompt: prompt)
                 guard !Task.isCancelled else { return }
                 phase = .inserting
                 let method = inserter.insert(

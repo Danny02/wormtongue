@@ -8,10 +8,6 @@ import WormtongueCore
 struct SetupView: View {
     @EnvironmentObject private var state: AppState
     @State private var granted: [Permission: Bool] = [:]
-    @State private var apiKeyField = ""
-    @State private var apiKeyStatus = ""
-    @State private var checking = false
-    @State private var healthResult = ""
 
     // Permissions get toggled in System Settings, outside this process — poll.
     @State private var poll = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
@@ -43,56 +39,9 @@ struct SetupView: View {
                     .padding(6)
                 }
 
-                GroupBox("Anthropic API Key") {
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text(
-                            Keychain.hasStoredKey
-                                ? "A key is stored in the Keychain."
-                                : "No key in the Keychain. ANTHROPIC_API_KEY is used as a fallback."
-                        )
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        HStack {
-                            SecureField("sk-ant-…", text: $apiKeyField)
-                                .frame(maxWidth: 320)
-                            Button("Save") {
-                                apiKeyStatus =
-                                    Keychain.save(apiKeyField)
-                                    ? "Saved to Keychain." : "Keychain write failed."
-                                apiKeyField = ""
-                            }
-                            .disabled(apiKeyField.isEmpty)
-                            Button("Remove") {
-                                Keychain.delete()
-                                apiKeyStatus = "Removed."
-                            }
-                        }
-                        if !apiKeyStatus.isEmpty {
-                            Text(apiKeyStatus).font(.caption).foregroundStyle(.secondary)
-                        }
-                        HStack {
-                            Button("Check connection") {
-                                checking = true
-                                healthResult = ""
-                                Task {
-                                    let result = await state.checkHealth()
-                                    healthResult =
-                                        result == nil ? "OK — endpoint and key work." : result!
-                                    checking = false
-                                }
-                            }
-                            .disabled(checking)
-                            if checking {
-                                ProgressView().controlSize(.small)
-                            }
-                        }
-                        if !healthResult.isEmpty {
-                            Text(healthResult)
-                                .font(.caption)
-                                .foregroundStyle(healthResult.hasPrefix("OK") ? .green : .orange)
-                        }
-                    }
-                    .padding(6)
+                GroupBox("Provider") {
+                    ProviderSection()
+                        .environmentObject(state)
                 }
 
                 GroupBox("Config") {
@@ -110,8 +59,9 @@ struct SetupView: View {
                         }
                         labelled(
                             "API endpoint",
-                            state.activeEndpoint.base.absoluteString
-                                + (state.activeEndpoint.isDefault ? "" : "  (overridden)"))
+                            state.config.activeProviderBaseURL
+                                ?? "n/a — subscription CLI")
+                        labelled("Rewire provider", state.config.provider.displayName)
                         labelled("Hotkey mode", state.config.hotkeyMode.rawValue)
                         labelled("Modes", state.config.modes.map(\.name).joined(separator: ", "))
                         labelled(
@@ -187,7 +137,7 @@ struct SetupView: View {
         VStack(alignment: .leading, spacing: 4) {
             Text("Wormtongue").font(.title2).bold()
             Text(
-                "Audio is transcribed on-device. The rewrite pass sends the transcript — and, for apps you opt in, the surrounding on-screen text — to the Anthropic API."
+                "Audio is transcribed on-device. The rewrite pass sends the transcript — and, for apps you opt in, the surrounding on-screen text — to the provider selected below (by default the Anthropic API)."
             )
             .font(.caption)
             .foregroundStyle(.secondary)
