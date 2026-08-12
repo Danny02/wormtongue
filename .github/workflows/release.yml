@@ -19,20 +19,22 @@ on:
 
 jobs:
   build-and-release:
-    runs-on: macos-14
+    runs-on: macos-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      # The built-in runner swift is 5.10, but the deps need tools 6.2
-      # (KeyboardShortcuts 3.x) and the manifest is 6.0 — match the local toolchain.
-      - name: Install Swift 6.2 toolchain
-        uses: swift-actions/setup-swift@v2
-        with:
-          swift-version: "6.2"
-
-      - name: Show toolchain
-        run: swift --version
+      # Use Apple's Xcode Swift toolchain (not the swift.org one): KeyboardShortcuts
+      # 3.x relies on SwiftUI's @Entry macro, which only the Apple toolchain expands.
+      # Pick the newest installed Xcode to match the local build (Swift 6.2).
+      - name: Select newest Xcode toolchain
+        run: |
+          NEWEST=$(ls -d /Applications/Xcode*.app 2>/dev/null | sort -V | tail -1)
+          if [ -n "$NEWEST" ]; then
+            echo "Selecting $NEWEST"
+            sudo xcode-select --switch "$NEWEST"
+          fi
+          swift --version
 
       - name: Build and sign app
         run: Scripts/bundle.sh release
