@@ -208,47 +208,11 @@ public enum AnthropicMessages {
         parse(decision: try text(fromStatus: status, body: body))
     }
 
-    private struct RawDecision: Decodable {
-        let action: String
-        let text: String
-    }
-
     /// Anything we cannot read as a decision degrades to inserting the response
     /// verbatim. A malformed reply must never be able to mean "replace the draft".
+    /// The shared parser lives in `EditDecisionJSON` so every provider ends up with
+    /// the same behaviour; this is a thin convenience for the Anthropic path.
     public static func parse(decision text: String) -> EditDecision {
-        let candidate = stripCodeFence(text)
-        guard
-            let data = candidate.data(using: .utf8),
-            let raw = try? JSONDecoder().decode(RawDecision.self, from: data)
-        else {
-            return EditDecision(action: .insert, text: text)
-        }
-
-        let body = raw.text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !body.isEmpty else { return EditDecision(action: .insert, text: text) }
-
-        // Only the two the model is allowed to pick; anything else is a mistake on
-        // its part and falls back to the non-destructive action.
-        guard let action = InsertionAction(rawValue: raw.action),
-            InsertionAction.modelChoosable.contains(action)
-        else {
-            return EditDecision(action: .insert, text: body)
-        }
-        return EditDecision(action: action, text: body)
-    }
-
-    /// Structured outputs should not fence the JSON, but models sometimes do.
-    static func stripCodeFence(_ text: String) -> String {
-        var lines = text.split(separator: "\n", omittingEmptySubsequences: false)
-        guard let first = lines.first, first.trimmingCharacters(in: .whitespaces).hasPrefix("```")
-        else { return text }
-        lines.removeFirst()
-        while let last = lines.last, last.trimmingCharacters(in: .whitespaces).isEmpty {
-            lines.removeLast()
-        }
-        if let last = lines.last, last.trimmingCharacters(in: .whitespaces) == "```" {
-            lines.removeLast()
-        }
-        return lines.joined(separator: "\n")
+        EditDecisionJSON.parse(decision: text)
     }
 }

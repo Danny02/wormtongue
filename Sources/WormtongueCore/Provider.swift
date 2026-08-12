@@ -49,12 +49,17 @@ public enum ProviderKind: String, Codable, Sendable, Equatable, CaseIterable, Id
 
     /// True when a conforming `LLMProvider` adapter exists in this build.
     ///
-    /// The Anthropic-keyed and Claude-subscription adapters ship; the
-    /// OpenAI-compatible and Codex adapters are wired by later tickets (#4, #6).
-    /// Selection, the per-provider settings, and the status panel all still work
-    /// for them — the panel says the adapter is not yet wired instead of
-    /// pretending dictation succeeded.
-    public var adapterAvailable: Bool { self == .anthropicKeyed || self == .claudeSubscription }
+    /// The keyed Anthropic, OpenAI-compatible, and Claude-subscription adapters
+    /// ship; the Codex adapter is wired by a later ticket (#6). Selection, the
+    /// per-provider settings, and the status panel all still work for it — the
+    /// panel says the adapter is not yet wired instead of pretending dictation
+    /// succeeded.
+    public var adapterAvailable: Bool {
+        switch self {
+        case .anthropicKeyed, .openAICompatible, .claudeSubscription: return true
+        case .codexSubscription: return false
+        }
+    }
 
     /// The default model string this provider serves when nothing overrides it,
     /// written in the provider's own model-string grammar:
@@ -154,6 +159,26 @@ public enum OpenAICompatPreset: String, Codable, Sendable, Equatable, CaseIterab
         case .custom: return nil
         }
     }
+
+    /// How this host can express the structured revise decision, declared
+    /// statically per host (never probed at runtime) because JSON structured
+    /// output is not portable across hosts: DeepSeek offers only the object form,
+    /// xAI rejects `additionalProperties:false`, and Groq's strict schema mode is
+    /// limited to specific models.
+    ///
+    /// Custom is an unknown host, so it gets no structured output and a `.revise`
+    /// degrades to a plain insert via the seam. The JSON-object presets ask the
+    /// model for valid JSON; the seam's `EditDecisionJSON` parse still degrades
+    /// any malformed decision to a verbatim insert, so a rewrite is never guessed.
+    public var structuredMode: OpenAICompatStructured {
+        switch self {
+        case .openRouter, .deepSeek, .groq, .xAI: return .jsonObject
+        case .custom: return .none
+        }
+    }
+
+    /// True when this host can express the structured revise decision.
+    public var supportsStructuredOutput: Bool { structuredMode != .none }
 }
 
 /// Per-provider settings for the config file.

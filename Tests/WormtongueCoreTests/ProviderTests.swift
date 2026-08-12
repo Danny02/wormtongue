@@ -22,10 +22,10 @@ struct ProviderKindTests {
         #expect(!ProviderKind.codexSubscription.isKeyed)
     }
 
-    @Test("Only the Anthropic-keyed adapter exists in this build")
+    @Test("The keyed Anthropic, OpenAI-compatible, and Claude-subscription adapters exist; Codex comes later")
     func adapterAvailability() {
         #expect(ProviderKind.anthropicKeyed.adapterAvailable)
-        #expect(!ProviderKind.openAICompatible.adapterAvailable)
+        #expect(ProviderKind.openAICompatible.adapterAvailable)
         #expect(ProviderKind.claudeSubscription.adapterAvailable)
         #expect(!ProviderKind.codexSubscription.adapterAvailable)
     }

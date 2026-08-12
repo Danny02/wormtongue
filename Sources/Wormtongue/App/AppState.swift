@@ -102,18 +102,18 @@ final class AppState: ObservableObject {
     private let inserter = TextInserter()
     private let anthropic = AnthropicClient()
     private let claude = ClaudeSubscriptionClient()
+    private let openAI = OpenAICompatibleClient()
 
     /// The pipeline's view of the rewrite provider: the interface, never a concrete
-    /// adapter. The Anthropic-keyed and Claude-subscription adapters exist in this
-    /// build; any other active provider throws an honest
+    /// adapter. The keyed Anthropic, OpenAI-compatible, and Claude-subscription
+    /// adapters exist in this build; any other active provider throws an honest
     /// `ProviderError.adapterUnavailable` rather than faking a success.
     private func activeLLMProvider() throws -> any LLMProvider {
         switch config.provider {
-        case .anthropicKeyed:
-            return anthropic
-        case .claudeSubscription:
-            return claude
-        case .openAICompatible, .codexSubscription:
+        case .anthropicKeyed: return anthropic
+        case .openAICompatible: return openAI
+        case .claudeSubscription: return claude
+        case .codexSubscription:
             throw ProviderError.adapterUnavailable(config.provider)
         }
     }
@@ -195,15 +195,16 @@ final class AppState: ObservableObject {
         Task { await prewarmModel() }
     }
 
-    /// Verifies the active provider's readiness. For the keyed Anthropic provider
-    /// this is a real one-token call against the endpoint; for the others it is the
-    /// local diagnostics (key/base presence, CLI install + login) plus an honest
-    /// note that the adapter is not wired yet.
+    /// Verifies the active provider's readiness. For the keyed providers this is a
+    /// real one-token call against the endpoint; for the subscription CLIs it is the
+    /// local diagnostics (install + login) plus an honest note that the adapter is
+    /// not wired yet.
     @MainActor
     func checkHealth() async -> ProviderStatus {
         var result = ProviderDiagnostics.status(
             provider: config.provider, settings: config.activeProviderSettings)
-        if config.provider == .anthropicKeyed {
+        switch config.provider {
+        case .anthropicKeyed:
             if let reason = await anthropic.healthCheck() {
                 result.headline = reason
                 result.symbol = "exclamationmark.triangle"
@@ -211,6 +212,16 @@ final class AppState: ObservableObject {
                 result.headline = "Ready — endpoint and key verified"
                 result.symbol = "checkmark.circle"
             }
+        case .openAICompatible:
+            if let reason = await openAI.healthCheck(model: config.resolvedModel(for: nil)) {
+                result.headline = reason
+                result.symbol = "exclamationmark.triangle"
+            } else {
+                result.headline = "Ready — endpoint and key verified"
+                result.symbol = "checkmark.circle"
+            }
+        case .claudeSubscription, .codexSubscription:
+            break
         }
         return result
     }
@@ -251,8 +262,8 @@ final class AppState: ObservableObject {
         var problems: [String] = []
         if let error { problems.append(error) }
 
-        // The active keyed provider's endpoint drives the Anthropic client (the only
-        // adapter in this build). A base URL that fails to parse falls back and is
+        // The active keyed provider's endpoint is parsed once here and drives the
+        // matching client below. A base URL that fails to parse falls back and is
         // reported. Subscription providers have no HTTP endpoint.
         let activeBase = loaded.activeProviderBaseURL
         let parsedEndpoint = activeBase.flatMap(APIEndpoint.init(base:))
@@ -263,10 +274,23 @@ final class AppState: ObservableObject {
             )
         }
         let headers = loaded.apiHeaders
-        if loaded.provider == .anthropicKeyed {
+        switch loaded.provider {
+        case .anthropicKeyed:
             Task { [anthropic] in
                 await anthropic.configure(endpoint: endpoint, headers: headers)
             }
+        case .openAICompatible:
+            let preset = loaded.providers[.openAICompatible]?.preset ?? .custom
+            // Resolve the openai host separately from the Anthropic `endpoint`:
+            // an unset custom URL must leave the client with no host, not fall back
+            // to Anthropic's. `activeProviderBaseURL` resolves preset host or the
+            // custom URL, and is nil when neither is set.
+            let openAIBase = loaded.activeProviderBaseURL.flatMap(URL.init(string:))
+            Task { [openAI] in
+                await openAI.configure(endpoint: openAIBase, preset: preset)
+            }
+        case .claudeSubscription, .codexSubscription:
+            break
         }
         activeEndpoint = endpoint
         let badPatterns = resolver.invalidTitlePatterns
@@ -525,6 +549,7 @@ final class AppState: ObservableObject {
         } catch {
             if Task.isCancelled || error is CancellationError { return }
             if let apiError = error as? AnthropicError, apiError == .cancelled { return }
+            if let apiError = error as? OpenAICompatibleError, apiError == .cancelled { return }
 
             log.error("llm: \(error.localizedDescription, privacy: .public)")
             // Fall back to the raw transcript rather than dropping the utterance.

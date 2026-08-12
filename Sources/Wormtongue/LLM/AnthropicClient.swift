@@ -33,7 +33,7 @@ actor AnthropicClient: LLMProvider {
     /// Structured outputs are supported: the Messages API's `output_config` ships
     /// the JSON decision a `.revise` needs. Declared statically; never
     /// feature-detected.
-    nonisolated var supportsStructuredOutput: Bool { true }
+    func supportsStructuredOutput() async -> Bool { true }
 
     /// Applied on every config load.
     func configure(endpoint: APIEndpoint, headers: [String: String]) {

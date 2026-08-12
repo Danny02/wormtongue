@@ -14,7 +14,7 @@ actor ClaudeSubscriptionClient: LLMProvider {
     /// Headless `claude -p` emits freeform text, not a structured decision we can
     /// trust, so `.revise` degrades to a plain insert via the interpreter — never
     /// a guessed rewrite.
-    nonisolated var supportsStructuredOutput: Bool { false }
+    func supportsStructuredOutput() async -> Bool { false }
 
     func complete(prompt: LLMPrompt) async throws -> LLMCompletion {
         try await SubscriptionCLI.complete(variant: variant, prompt: prompt)

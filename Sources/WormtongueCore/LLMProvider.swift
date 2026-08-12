@@ -57,8 +57,10 @@ public protocol LLMProvider: Sendable {
     /// Declared statically by each adapter; never feature-detected at runtime.
     ///
     /// When false, a `.revise` intent cannot produce a structured decision and
-    /// degrades to a plain insert — never a guessed rewrite.
-    var supportsStructuredOutput: Bool { get }
+    /// degrades to a plain insert — never a guessed rewrite. Async so an
+    /// actor-backed adapter can read its own configured capability without an
+    /// unsynchronized escape hatch.
+    func supportsStructuredOutput() async -> Bool
 
     /// One stateless completion per utterance → the raw text, plus any reasoning.
     func complete(prompt: LLMPrompt) async throws -> LLMCompletion
@@ -88,7 +90,7 @@ public enum EditDecisionInterpreter {
             guard supportsStructuredOutput else {
                 return EditDecision(action: .insert, text: text)
             }
-            return AnthropicMessages.parse(decision: text)
+            return EditDecisionJSON.parse(decision: text)
         }
     }
 }
@@ -100,9 +102,10 @@ public enum LLMPipeline {
         prompt: LLMPrompt
     ) async throws -> LLMResult {
         let completion = try await provider.complete(prompt: prompt)
+        let supportsStructured = await provider.supportsStructuredOutput()
         let decision = EditDecisionInterpreter.decision(
             intent: prompt.intent,
-            supportsStructuredOutput: provider.supportsStructuredOutput,
+            supportsStructuredOutput: supportsStructured,
             text: completion.text)
         return LLMResult(thinking: completion.thinking, decision: decision)
     }

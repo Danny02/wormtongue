@@ -69,21 +69,17 @@ enum ProviderDiagnostics {
         case (false, true):
             headline = "Needs an API key"
         case (true, true):
-            headline = "Configured — adapter not wired yet"
+            headline = "Configured — verify with Check"
         }
         var detail = [
             hasKey ? "API key stored in the Keychain." : "No API key in the Keychain.",
             base.map { "Endpoint: \($0)" } ?? "No base URL set.",
+            "Use Check to verify the key against the endpoint.",
         ]
-        if !ProviderKind.openAICompatible.adapterAvailable {
-            detail.append(
-                "The OpenAI-compatible adapter ships in a later build; dictation is not available with this provider yet."
-            )
-        }
         return ProviderStatus(
             headline: headline,
             symbol: headline.hasPrefix("Configured")
-                ? "dot.radiowaves.left.and.right" : "exclamationmark.triangle",
+                ? "key.fill" : "exclamationmark.triangle",
             detail: detail.joined(separator: "\n"),
             actionURL: nil)
     }

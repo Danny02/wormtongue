@@ -6,14 +6,16 @@ import Testing
 /// A provider that returns a fixed completion and records what it was asked.
 /// No network, no CLI, no keys — the tests exercise the seam, not a transport.
 final class StubProvider: LLMProvider, @unchecked Sendable {
-    let supportsStructuredOutput: Bool
+    let supportsStructured: Bool
     private let completion: LLMCompletion
     private(set) var receivedPrompts: [LLMPrompt] = []
 
-    init(supportsStructuredOutput: Bool, completion: LLMCompletion) {
-        self.supportsStructuredOutput = supportsStructuredOutput
+    init(supportsStructured: Bool, completion: LLMCompletion) {
+        self.supportsStructured = supportsStructured
         self.completion = completion
     }
+
+    func supportsStructuredOutput() async -> Bool { supportsStructured }
 
     func complete(prompt: LLMPrompt) async throws -> LLMCompletion {
         receivedPrompts.append(prompt)
@@ -64,7 +66,7 @@ struct LLMProviderSeamTests {
 
         // The mode with an override feeds its own model to the provider.
         let stubA = StubProvider(
-            supportsStructuredOutput: false,
+            supportsStructured: false,
             completion: LLMCompletion(text: "x", thinking: nil))
         let work = resolver.mode(bundleId: "com.work.app", windowTitle: nil)
         _ = try await LLMPipeline.run(
@@ -76,7 +78,7 @@ struct LLMProviderSeamTests {
 
         // A mode without an override falls back to the global model.
         let stubB = StubProvider(
-            supportsStructuredOutput: false,
+            supportsStructured: false,
             completion: LLMCompletion(text: "y", thinking: nil))
         let plain = resolver.mode(bundleId: "com.unknown", windowTitle: nil)
         _ = try await LLMPipeline.run(
@@ -106,7 +108,7 @@ struct LLMProviderSeamTests {
     @Test("compose always inserts the returned text")
     func composeInserts() async throws {
         let stub = StubProvider(
-            supportsStructuredOutput: true,
+            supportsStructured: true,
             completion: LLMCompletion(text: "Hello.", thinking: nil))
         let result = try await LLMPipeline.run(provider: stub, prompt: prompt(intent: .compose))
         #expect(result.decision == EditDecision(action: .insert, text: "Hello."))
@@ -116,7 +118,7 @@ struct LLMProviderSeamTests {
     @Test("replaceSelection maps to a selection replacement, never the model's choice")
     func replaceSelectionIsDeterministic() async throws {
         let stub = StubProvider(
-            supportsStructuredOutput: true,
+            supportsStructured: true,
             completion: LLMCompletion(text: "new", thinking: nil))
         let result = try await LLMPipeline.run(
             provider: stub, prompt: prompt(intent: .replaceSelection))
@@ -126,7 +128,7 @@ struct LLMProviderSeamTests {
     @Test("revise with structured output honours the model's replace_all decision")
     func reviseStructuredRewrite() async throws {
         let stub = StubProvider(
-            supportsStructuredOutput: true,
+            supportsStructured: true,
             completion: LLMCompletion(
                 text: #"{"action":"replace_all","text":"New draft."}"#, thinking: "quiet"))
         let result = try await LLMPipeline.run(provider: stub, prompt: prompt(intent: .revise))
@@ -138,7 +140,7 @@ struct LLMProviderSeamTests {
     @Test("revise with structured output honours the model's insert decision")
     func reviseStructuredInsert() async throws {
         let stub = StubProvider(
-            supportsStructuredOutput: true,
+            supportsStructured: true,
             completion: LLMCompletion(
                 text: #"{"action":"insert","text":"and another thing"}"#, thinking: nil))
         let result = try await LLMPipeline.run(provider: stub, prompt: prompt(intent: .revise))
@@ -148,11 +150,14 @@ struct LLMProviderSeamTests {
     @Test("revise without structured output degrades to a plain insert, never a guessed rewrite")
     func reviseFallsBackToInsert() async throws {
         let stub = StubProvider(
-            supportsStructuredOutput: false,
+            supportsStructured: false,
             completion: LLMCompletion(
                 text: "Some prose that must be inserted verbatim.", thinking: nil))
         let result = try await LLMPipeline.run(provider: stub, prompt: prompt(intent: .revise))
-        #expect(result.decision == EditDecision(action: .insert, text: "Some prose that must be inserted verbatim."))
+        #expect(
+            result.decision
+                == EditDecision(action: .insert, text: "Some prose that must be inserted verbatim.")
+        )
         #expect(result.decision.action != .replaceAll)
         #expect(result.decision.action != .replaceSelection)
     }
@@ -160,7 +165,7 @@ struct LLMProviderSeamTests {
     @Test("Thinking from the provider is surfaced on the result")
     func thinkingSurfaces() async throws {
         let stub = StubProvider(
-            supportsStructuredOutput: true,
+            supportsStructured: true,
             completion: LLMCompletion(text: "hi", thinking: "because"))
         let result = try await LLMPipeline.run(provider: stub, prompt: prompt(intent: .compose))
         #expect(result.thinking == "because")
@@ -171,11 +176,11 @@ struct LLMProviderSeamTests {
         // Same prompt, two providers with different capabilities and outputs; the
         // pipeline returns the right outcome for each without knowing which it is.
         let structured = StubProvider(
-            supportsStructuredOutput: true,
+            supportsStructured: true,
             completion: LLMCompletion(
                 text: #"{"action":"replace_all","text":"rewrote"}"#, thinking: nil))
         let plain = StubProvider(
-            supportsStructuredOutput: false,
+            supportsStructured: false,
             completion: LLMCompletion(text: "just add this", thinking: nil))
 
         let fromStructured = try await LLMPipeline.run(
@@ -223,7 +228,8 @@ struct EditDecisionInterpreterTests {
     func malformedStructured() {
         #expect(
             EditDecisionInterpreter.decision(
-                intent: .revise, supportsStructuredOutput: true, text: "not json").action
+                intent: .revise, supportsStructuredOutput: true, text: "not json"
+            ).action
                 == .insert)
     }
 }
