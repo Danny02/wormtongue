@@ -102,19 +102,17 @@ final class AppState: ObservableObject {
     private let inserter = TextInserter()
     private let anthropic = AnthropicClient()
     private let claude = ClaudeSubscriptionClient()
+    private let codex = CodexSubscriptionClient()
     private let openAI = OpenAICompatibleClient()
 
     /// The pipeline's view of the rewrite provider: the interface, never a concrete
-    /// adapter. The keyed Anthropic, OpenAI-compatible, and Claude-subscription
-    /// adapters exist in this build; any other active provider throws an honest
-    /// `ProviderError.adapterUnavailable` rather than faking a success.
+    /// adapter. Every provider in the catalogue has an adapter in this build.
     private func activeLLMProvider() throws -> any LLMProvider {
         switch config.provider {
         case .anthropicKeyed: return anthropic
         case .openAICompatible: return openAI
         case .claudeSubscription: return claude
-        case .codexSubscription:
-            throw ProviderError.adapterUnavailable(config.provider)
+        case .codexSubscription: return codex
         }
     }
     private let overlay = OverlayController()
@@ -402,7 +400,9 @@ final class AppState: ObservableObject {
                 Task { [anthropic] in await anthropic.warmConnection() }
             case .claudeSubscription:
                 Task { [claude] in await claude.warm() }
-            case .openAICompatible, .codexSubscription:
+            case .codexSubscription:
+                Task { [codex] in await codex.warm() }
+            case .openAICompatible:
                 break
             }
         }

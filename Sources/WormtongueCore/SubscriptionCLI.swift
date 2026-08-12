@@ -199,6 +199,112 @@ public enum SubscriptionCLI {
             : thinkings.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
         return LLMCompletion(text: joined, thinking: thinking)
     }
+
+    /// Parses `codex exec --json` output: a single newline-delimited JSON (JSONL)
+    /// stream of events, not one final JSON object.
+    ///
+    /// The final assistant answer arrives as an `item.completed` event whose
+    /// `item.type` is `agent_message` carrying a `text` field. Intermediate
+    /// tool/commentary chatter is skipped, and the *last* plain `agent_message`
+    /// text wins — that is what the user asked for. Codex exposes no thinking
+    /// stream to surface, so `thinking` is always nil.
+    ///
+    /// If codex reported the turn failed before any full agent message arrived,
+    /// the underlying reason is surfaced honestly rather than guessing at text.
+    public static func parseCodexJSONL(_ data: Data) throws -> LLMCompletion {
+        guard let text = String(data: data, encoding: .utf8) else {
+            throw SubscriptionCLIError.unparseable("codex", "output was not UTF-8 text")
+        }
+        var lastAnswer: String?
+        var failureMessage: String?
+        for line in text.split(omittingEmptySubsequences: true, whereSeparator: \.isNewline) {
+            guard
+                let object = try? JSONSerialization.jsonObject(with: Data(line.utf8))
+                    as? [String: Any]
+            else { continue }
+            if object["type"] as? String == "item.completed",
+                let item = object["item"] as? [String: Any],
+                let itemType = item["type"] as? String,
+                itemType == "agent_message",
+                let s = item["text"] as? String, !s.isEmpty
+            {
+                lastAnswer = s
+                continue
+            }
+            // A failed turn carries the underlying reason in `error.message`.
+            if (object["type"] as? String) == "turn.failed",
+                let failure = object["error"] as? [String: Any],
+                let message = failure["message"] as? String, !message.isEmpty
+            {
+                failureMessage = message
+                continue
+            }
+            // A terminal top-level `error` event also names the reason. It is only
+            // a fallback: codex can emit transient error notices that a later turn
+            // survives, so it must never veto a real answer that was captured.
+            if (object["type"] as? String) == "error",
+                let message = object["message"] as? String, !message.isEmpty,
+                failureMessage == nil
+            {
+                failureMessage = message
+            }
+        }
+        guard let answer = lastAnswer?.trimmingCharacters(in: .whitespacesAndNewlines),
+            !answer.isEmpty
+        else {
+            if let failureMessage {
+                throw SubscriptionCLIError.unparseable("codex", failureMessage)
+            }
+            throw SubscriptionCLIError.unparseable("codex", "no agent text in output")
+        }
+        return LLMCompletion(text: answer, thinking: nil)
+    }
+}
+
+/// The Codex subscription CLI variant.
+///
+/// Kept in Core so the exact spawned args, the env sanitisation, and the output
+/// parser are unit-tested against a fake `codex` on PATH — the app's adapter is
+/// a thin shell over this, exactly like `claude` before it.
+public enum CodexSubscriptionCLI {
+    /// Headless one-shot that reuses the user's own subscription login.
+    ///
+    /// `codex exec` runs non-interactively and exits; the prompt, model, sandbox,
+    /// and JSON output are explicit. `--sandbox read-only` means the rewrite pass
+    /// can never let the model run a mutating shell command, and
+    /// `--skip-git-repo-check` lets a dictation work in a non-repo field. `--json`
+    /// makes stdout a JSONL event stream the parser turns into one answer.
+    ///
+    /// `codex exec` has no `--system-prompt` flag, so the system prompt is
+    /// prepended to the user message rather than dropped or mangled through a `-c`
+    /// TOML override. The keyed `OPENAI_API_KEY`/`OPENAI_ACCESS_TOKEN` credentials
+    /// and the `OPENAI_BASE_URL`/`OPENAI_MODEL` overrides are stripped because
+    /// codex honours them over its stored login — Wormtongue must not leak a keyed
+    /// credential or redirect the endpoint on a subscription run.
+    public static let variant = SubscriptionCLIVariant(
+        executable: "codex",
+        argBuilder: { prompt in
+            [
+                "exec",
+                prompt.system.isEmpty
+                    ? prompt.user : "\(prompt.system)\n\n\(prompt.user)",
+                "-m", prompt.model,
+                "--sandbox", "read-only",
+                "--skip-git-repo-check",
+                "--json",
+            ]
+        },
+        envSanitizer: { env in
+            var e = env
+            e.removeValue(forKey: "OPENAI_API_KEY")
+            e.removeValue(forKey: "OPENAI_ACCESS_TOKEN")
+            e.removeValue(forKey: "OPENAI_BASE_URL")
+            e.removeValue(forKey: "OPENAI_MODEL")
+            return e
+        },
+        outputParser: { data in try SubscriptionCLI.parseCodexJSONL(data) },
+        primeArguments: ["login", "status"]
+    )
 }
 
 /// The Claude subscription CLI variant. Kept in Core so the exact spawned args,

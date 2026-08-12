@@ -49,15 +49,12 @@ public enum ProviderKind: String, Codable, Sendable, Equatable, CaseIterable, Id
 
     /// True when a conforming `LLMProvider` adapter exists in this build.
     ///
-    /// The keyed Anthropic, OpenAI-compatible, and Claude-subscription adapters
-    /// ship; the Codex adapter is wired by a later ticket (#6). Selection, the
-    /// per-provider settings, and the status panel all still work for it — the
-    /// panel says the adapter is not yet wired instead of pretending dictation
-    /// succeeded.
+    /// All four catalogue providers ship adapters; the subscription providers
+    /// reuse the user's existing CLI login and Wormtongue stores nothing secret.
     public var adapterAvailable: Bool {
         switch self {
-        case .anthropicKeyed, .openAICompatible, .claudeSubscription: return true
-        case .codexSubscription: return false
+        case .anthropicKeyed, .openAICompatible, .claudeSubscription, .codexSubscription:
+            return true
         }
     }
 
@@ -72,7 +69,7 @@ public enum ProviderKind: String, Codable, Sendable, Equatable, CaseIterable, Id
         case .anthropicKeyed: return "claude-haiku-4-5-20251001"
         case .openAICompatible: return "deepseek/deepseek-chat"
         case .claudeSubscription: return "claude-sonnet-4-5"
-        case .codexSubscription: return "gpt-5"
+        case .codexSubscription: return "gpt-5-codex"
         }
     }
 
