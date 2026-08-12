@@ -17,6 +17,11 @@ on:
     types:
       - published
 
+# GITHUB_TOKEN needs write access to attach the binary and generate
+# release notes; the default token for a release-triggered run is read-only.
+permissions:
+  contents: write
+
 jobs:
   build-and-release:
     runs-on: macos-latest
