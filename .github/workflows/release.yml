@@ -1,0 +1,49 @@
+name: Release
+
+# Builds the macOS app and attaches the .app bundle to a GitHub Release.
+#
+# Trigger: push a version tag, e.g.
+#
+#     git tag v0.1.0 && git push origin v0.1.0
+#
+# The runner is an Apple machine because the app target needs AppKit,
+# Accessibility, AVFoundation, and WhisperKit, none of which build on Linux.
+# No "VoiceMode Dev" cert exists on CI, so the app is signed ad-hoc (-). Users
+# downloading it will get a Gatekeeper "unidentified developer" prompt and need
+# to right-click → Open the first time.
+
+on:
+  push:
+    tags:
+      - "v*"
+
+jobs:
+  build-and-release:
+    runs-on: macos-14
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Show toolchain
+        run: swift --version
+
+      - name: Build and sign app
+        run: Scripts/bundle.sh release
+
+      - name: Run core tests
+        run: swift test -c release
+
+      - name: Package app bundle
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          ZIP="VoiceMode-macOS-${VERSION}.zip"
+          ditto -c -k --sequesterRsrc --keepParent build/VoiceMode.app "$ZIP"
+          echo "artifact=$ZIP" >> "$GITHUB_ENV"
+          echo "Built $ZIP ($(du -h "$ZIP" | cut -f1))"
+
+      - name: Attach to release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ${{ env.artifact }}
+          generate_release_notes: true
+          fail_on_unmatched_files: true
