@@ -26,7 +26,7 @@ struct ProviderKindTests {
     func adapterAvailability() {
         #expect(ProviderKind.anthropicKeyed.adapterAvailable)
         #expect(!ProviderKind.openAICompatible.adapterAvailable)
-        #expect(!ProviderKind.claudeSubscription.adapterAvailable)
+        #expect(ProviderKind.claudeSubscription.adapterAvailable)
         #expect(!ProviderKind.codexSubscription.adapterAvailable)
     }
 

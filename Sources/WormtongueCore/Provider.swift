@@ -49,12 +49,12 @@ public enum ProviderKind: String, Codable, Sendable, Equatable, CaseIterable, Id
 
     /// True when a conforming `LLMProvider` adapter exists in this build.
     ///
-    /// Only the Anthropic-keyed adapter ships so far; the OpenAI-compatible,
-    /// Claude, and Codex adapters are wired by later tickets. Selection, the
-    /// per-provider settings, and the status panel all still work for them — the
-    /// panel says the adapter is not yet wired instead of pretending dictation
-    /// succeeded.
-    public var adapterAvailable: Bool { self == .anthropicKeyed }
+    /// The Anthropic-keyed and Claude-subscription adapters ship; the
+    /// OpenAI-compatible and Codex adapters are wired by later tickets (#4, #6).
+    /// Selection, the per-provider settings, and the status panel all still work
+    /// for them — the panel says the adapter is not yet wired instead of
+    /// pretending dictation succeeded.
+    public var adapterAvailable: Bool { self == .anthropicKeyed || self == .claudeSubscription }
 
     /// The default model string this provider serves when nothing overrides it,
     /// written in the provider's own model-string grammar:

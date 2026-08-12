@@ -101,16 +101,21 @@ final class AppState: ObservableObject {
     private let contextProbe = ContextProbe()
     private let inserter = TextInserter()
     private let anthropic = AnthropicClient()
+    private let claude = ClaudeSubscriptionClient()
 
     /// The pipeline's view of the rewrite provider: the interface, never a concrete
-    /// adapter. Only the Anthropic-keyed adapter exists in this build, so any other
-    /// active provider throws an honest `ProviderError.adapterUnavailable` rather
-    /// than faking a success.
+    /// adapter. The Anthropic-keyed and Claude-subscription adapters exist in this
+    /// build; any other active provider throws an honest
+    /// `ProviderError.adapterUnavailable` rather than faking a success.
     private func activeLLMProvider() throws -> any LLMProvider {
-        guard config.provider.adapterAvailable else {
+        switch config.provider {
+        case .anthropicKeyed:
+            return anthropic
+        case .claudeSubscription:
+            return claude
+        case .openAICompatible, .codexSubscription:
             throw ProviderError.adapterUnavailable(config.provider)
         }
-        return anthropic
     }
     private let overlay = OverlayController()
 
@@ -364,9 +369,18 @@ final class AppState: ObservableObject {
             return result
         }
 
-        // Same idea for the TLS handshake to the API.
-        if policy.llmAllowed, config.provider == .anthropicKeyed {
-            Task { [anthropic] in await anthropic.warmConnection() }
+        // Same idea for the transport warm-up: Anthropic opens its TLS handshake,
+        // the Claude subscription spawns/primes its CLI — both before the
+        // transcript is ready, hiding startup behind the speech.
+        if policy.llmAllowed {
+            switch config.provider {
+            case .anthropicKeyed:
+                Task { [anthropic] in await anthropic.warmConnection() }
+            case .claudeSubscription:
+                Task { [claude] in await claude.warm() }
+            case .openAICompatible, .codexSubscription:
+                break
+            }
         }
     }
 
