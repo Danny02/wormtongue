@@ -24,11 +24,12 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      # The built-in runner swift is 5.10, but Package.swift needs toolchain 6.0.
-      - name: Install Swift 6 toolchain
+      # The built-in runner swift is 5.10, but the deps need tools 6.2
+      # (KeyboardShortcuts 3.x) and the manifest is 6.0 — match the local toolchain.
+      - name: Install Swift 6.2 toolchain
         uses: swift-actions/setup-swift@v2
         with:
-          swift-version: "6.0"
+          swift-version: "6.2"
 
       - name: Show toolchain
         run: swift --version
