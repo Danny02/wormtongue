@@ -15,7 +15,11 @@ actor AnthropicClient {
     private let warmInterval = Duration.seconds(50)
     private var lastWarmed: ContinuousClock.Instant?
 
-    init(timeout: TimeInterval = 15) {
+    // DeepSeek emits a sizeable thinking block before the answer, and a real
+    // utterance ships up to context_char_cap of surrounding text — together easy
+    // to exceed a 15s budget. 60s keeps dictation from spuriously timing out
+    // while still bounding a wedged request.
+    init(timeout: TimeInterval = 60) {
         let configuration = URLSessionConfiguration.ephemeral
         configuration.timeoutIntervalForRequest = timeout
         configuration.timeoutIntervalForResource = timeout
@@ -54,14 +58,50 @@ actor AnthropicClient {
         _ = try? await session.data(for: request)
     }
 
+    /// Verifies the configured endpoint + stored key with a real one-token call.
+    /// Returns nil on success, or a human-readable failure reason.
+    func healthCheck() async -> String? {
+        guard let apiKey = Keychain.apiKey() else {
+            return "No API key stored in the Keychain."
+        }
+        var request = URLRequest(url: endpoint.messages)
+        request.httpMethod = "POST"
+        request.httpBody = try? AnthropicMessages.Request(
+            model: "deepseek/deepseek-v4-flash", system: "ping", user: "ping",
+            maxTokens: 1
+        ).encoded()
+        request.setValue("application/json", forHTTPHeaderField: "content-type")
+        applyHeaders(to: &request, apiKey: apiKey)
+        do {
+            let (data, response) = try await session.data(for: request)
+            let status = (response as? HTTPURLResponse)?.statusCode ?? 0
+            if (200..<300).contains(status) { return nil }
+            let detail = try? AnthropicMessages.text(fromStatus: status, body: data)
+            return "HTTP \(status)\(detail.map { ": \($0)" } ?? "")"
+        } catch {
+            return error.localizedDescription
+        }
+    }
+
     /// Rewrites the utterance and says what to do with the result.
     ///
     /// `.compose` and `.replaceSelection` are deterministic, so they ask for plain
     /// text. Only `.revise` — a draft with no selection — needs the model to choose
     /// between adding and rewriting, and only that shape pays for structured output.
+    /// The decision, plus what History needs to explain how it was reached.
+    struct EditOutcome {
+        let decision: EditDecision
+        /// Reasoning, when the endpoint returned any. Nil against the plain API.
+        let thinking: String?
+        /// The exact text the model was given, kept verbatim for History.
+        let systemPrompt: String
+        let userMessage: String
+        let model: String
+    }
+
     func edit(
         model: String, system: String, user: String, maxTokens: Int, intent: EditIntent
-    ) async throws -> EditDecision {
+    ) async throws -> EditOutcome {
         let structured = intent.needsDecision
         let body = try AnthropicMessages.Request(
             model: model, system: system, user: user, maxTokens: maxTokens,
@@ -79,12 +119,16 @@ actor AnthropicClient {
             (status, data) = try await send(body)
         }
 
-        guard structured else {
-            let text = try AnthropicMessages.text(fromStatus: status, body: data)
-            return EditDecision(
-                action: intent == .replaceSelection ? .replaceSelection : .insert, text: text)
-        }
-        return try AnthropicMessages.decision(fromStatus: status, body: data)
+        let completion = try AnthropicMessages.completion(fromStatus: status, body: data)
+        let decision =
+            structured
+            ? AnthropicMessages.parse(decision: completion.text)
+            : EditDecision(
+                action: intent == .replaceSelection ? .replaceSelection : .insert,
+                text: completion.text)
+        return EditOutcome(
+            decision: decision, thinking: completion.thinking,
+            systemPrompt: system, userMessage: user, model: model)
     }
 
     private func send(_ body: Data) async throws -> (status: Int, data: Data) {

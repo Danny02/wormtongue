@@ -51,18 +51,24 @@ public enum AnthropicMessages {
         public let messages: [Message]
         /// Present only for `.revise`, where we need a decision and not just text.
         public let outputConfig: OutputConfig?
+        /// Explicit `thinking: disabled`. Models that reason by default (DeepSeek,
+        /// newer Claude) roughly double latency with a thinking block; a rewrite
+        /// pass is mechanical, so we always opt out.
+        public let thinking: Thinking = Thinking()
+
+        public struct Thinking: Encodable, Sendable {
+            public let type = "disabled"
+        }
 
         // Keys are spelled out rather than using `.convertToSnakeCase`, because
         // that strategy would also rewrite the JSON Schema's own `additionalProperties`
         // key and the API would reject the schema.
         enum CodingKeys: String, CodingKey {
-            case model, system, messages
+            case model, system, messages, thinking
             case maxTokens = "max_tokens"
             case outputConfig = "output_config"
         }
 
-        // No `thinking` block: latency matters more than depth for a rewrite pass,
-        // and Haiku 4.5 does not think unless asked.
         public init(
             model: String, system: String, user: String, maxTokens: Int,
             structured: Bool = false
@@ -119,6 +125,10 @@ public enum AnthropicMessages {
         struct ContentBlock: Decodable {
             let type: String
             let text: String?
+            /// Present only when the endpoint returns reasoning. This app never asks
+            /// for it, but a gateway in front of the API may add it, and History is
+            /// more useful with it than without.
+            let thinking: String?
         }
         struct StopDetails: Decodable {
             let category: String?
@@ -137,9 +147,19 @@ public enum AnthropicMessages {
         let error: Payload?
     }
 
+    /// What came back: the text to use, plus any reasoning the endpoint volunteered.
+    public struct Completion: Equatable, Sendable {
+        public let text: String
+        public let thinking: String?
+    }
+
     /// Turns an HTTP status plus body into either the rewritten text or a typed
     /// error. Pure, so it can be tested without a network.
     public static func text(fromStatus status: Int, body: Data) throws -> String {
+        try completion(fromStatus: status, body: body).text
+    }
+
+    public static func completion(fromStatus status: Int, body: Data) throws -> Completion {
         let decoder = JSONDecoder()
         decoder.keyDecodingStrategy = .convertFromSnakeCase
 
@@ -165,14 +185,22 @@ public enum AnthropicMessages {
             throw AnthropicError.refused(category: response.stopDetails?.category)
         }
 
-        let text = (response.content ?? [])
+        let blocks = response.content ?? []
+        let text = blocks
             .filter { $0.type == "text" }
             .compactMap(\.text)
             .joined()
             .trimmingCharacters(in: .whitespacesAndNewlines)
 
         guard !text.isEmpty else { throw AnthropicError.emptyResponse }
-        return text
+
+        let thinking = blocks
+            .filter { $0.type == "thinking" }
+            .compactMap(\.thinking)
+            .joined(separator: "\n")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+
+        return Completion(text: text, thinking: thinking.isEmpty ? nil : thinking)
     }
 
     /// The `.revise` counterpart: an action plus the text to apply it with.
@@ -187,7 +215,7 @@ public enum AnthropicMessages {
 
     /// Anything we cannot read as a decision degrades to inserting the response
     /// verbatim. A malformed reply must never be able to mean "replace the draft".
-    static func parse(decision text: String) -> EditDecision {
+    public static func parse(decision text: String) -> EditDecision {
         let candidate = stripCodeFence(text)
         guard
             let data = candidate.data(using: .utf8),

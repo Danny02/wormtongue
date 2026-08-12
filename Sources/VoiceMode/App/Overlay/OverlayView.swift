@@ -50,6 +50,10 @@ struct OverlayView: View {
             Image(systemName: "waveform")
                 .foregroundStyle(.primary)
                 .font(.system(size: 15, weight: .semibold))
+        case .readingContext:
+            Image(systemName: "text.viewfinder")
+                .foregroundStyle(.primary)
+                .font(.system(size: 15, weight: .semibold))
         case let .rewriting(contextSent):
             Image(systemName: contextSent ? "paperplane.fill" : "wand.and.stars")
                 .foregroundStyle(contextSent ? .orange : .accentColor)
@@ -63,7 +67,13 @@ struct OverlayView: View {
                 .foregroundStyle(.orange)
                 .font(.system(size: 15, weight: .semibold))
         case .idle:
-            EmptyView()
+            if state.modelStage != nil {
+                Image(systemName: "arrow.down.circle")
+                    .foregroundStyle(.secondary)
+                    .font(.system(size: 15, weight: .semibold))
+            } else {
+                EmptyView()
+            }
         }
     }
 
@@ -72,20 +82,29 @@ struct OverlayView: View {
         switch state.phase {
         case .recording:
             LevelMeter(level: state.inputLevel)
-        case .transcribing, .rewriting, .inserting:
+        case .transcribing, .readingContext, .rewriting, .inserting:
             ProgressView()
                 .controlSize(.small)
                 .progressViewStyle(.circular)
-        case .done, .failed, .idle:
+        case .done, .failed:
             EmptyView()
+        case .idle:
+            if state.modelStage != nil {
+                ProgressView()
+                    .controlSize(.small)
+                    .progressViewStyle(.circular)
+            } else {
+                EmptyView()
+            }
         }
     }
 
     private var title: String {
         switch state.phase {
-        case .idle: return ""
+        case .idle: return state.modelStage?.label ?? ""
         case .recording: return "Listening…"
-        case .transcribing: return "Transcribing"
+        case .transcribing: return state.modelStage?.label ?? "Transcribing"
+        case .readingContext: return "Reading the app's text"
         case .rewriting:
             switch state.activeIntent {
             case .compose: return "Rewriting"
@@ -105,7 +124,9 @@ struct OverlayView: View {
             let hint = state.targetAppName.map { "into \($0)" } ?? "hold to keep talking"
             return String(format: "%@ · %.1fs", hint, seconds)
         case .transcribing:
-            return "on this Mac"
+            return state.modelStage?.detail ?? "on this Mac"
+        case .readingContext:
+            return state.targetAppName.map { "in \($0)" } ?? "accessibility probe"
         case let .rewriting(contextSent):
             // Say out loud what is being changed, and when the window's text is
             // leaving the machine.
@@ -122,7 +143,7 @@ struct OverlayView: View {
         case .failed:
             return state.failureMessage
         case .idle:
-            return nil
+            return state.modelStage?.detail
         }
     }
 }

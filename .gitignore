@@ -9,3 +9,6 @@ DerivedData/
 
 # Local Swift toolchain used for the Linux-side checks
 /opt/
+
+# pi agent local state
+.pi/

@@ -20,7 +20,8 @@ struct AnthropicRequestTests {
         #expect(json["model"] as? String == "claude-haiku-4-5-20251001")
         #expect(json["max_tokens"] as? Int == 1024)  // snake_case on the wire
         #expect(json["system"] as? String == "you rewrite speech")
-        #expect(json["thinking"] == nil)  // latency: no thinking on a rewrite pass
+        // Latency: the rewrite pass always opts out of the model's thinking block.
+        #expect(json["thinking"] as? [String: String] == ["type": "disabled"])
 
         let messages = json["messages"] as? [[String: Any]]
         #expect(messages?.count == 1)
@@ -53,6 +54,25 @@ struct AnthropicResponseTests {
             """
         let text = try AnthropicMessages.text(fromStatus: 200, body: body(json))
         #expect(text == "Meeting with @heiko re EN-66 tomorrow.")
+    }
+
+    @Test("A thinking block is captured for History, never mixed into the output")
+    func thinkingIsSeparate() throws {
+        let json = """
+            { "content": [
+                { "type": "thinking", "thinking": "the draft is already polite" },
+                { "type": "text", "text": "Thursday works." }],
+              "stop_reason": "end_turn" }
+            """
+        let completion = try AnthropicMessages.completion(fromStatus: 200, body: body(json))
+        #expect(completion.text == "Thursday works.")
+        #expect(completion.thinking == "the draft is already polite")
+    }
+
+    @Test("No thinking block leaves the trace nil rather than empty")
+    func thinkingAbsent() throws {
+        let json = #"{ "content": [{ "type": "text", "text": "ok" }] }"#
+        #expect(try AnthropicMessages.completion(fromStatus: 200, body: body(json)).thinking == nil)
     }
 
     @Test("Multiple text blocks are concatenated, non-text blocks skipped")

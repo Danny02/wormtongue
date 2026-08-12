@@ -5,7 +5,6 @@ import Testing
 
 private func makeConfig(
     dictionary: [String] = [],
-    llm: [String] = [],
     edit: [String] = [],
     context: [String] = [],
     denied: [String] = [],
@@ -20,7 +19,6 @@ private func makeConfig(
         contextCharCap: 4000,
         fieldCharCap: 4000,
         dictionary: dictionary,
-        llmOptInBundleIds: llm,
         editOptInBundleIds: edit,
         contextOptInBundleIds: context,
         deniedBundleIds: denied,
@@ -35,19 +33,11 @@ private func makeConfig(
 @Suite("Privacy policy")
 struct PolicyTests {
 
-    @Test("Nothing opted in means no API call at all — the shipped default")
-    func defaultIsLocalOnly() {
+    @Test("The rewrite pass runs by default, but reads nothing")
+    func defaultIsTranscriptOnly() {
         let resolver = ModeResolver(config: makeConfig())
-        let policy = resolver.policy(for: "com.tinyspeck.slackmacgap")
-        #expect(!policy.denied)
-        #expect(!policy.llmAllowed)
-        #expect(!policy.contextAllowed)
-    }
-
-    @Test("Opting in to the LLM pass does not opt in to the field or the screen")
-    func llmWithoutContext() {
-        let resolver = ModeResolver(config: makeConfig(llm: ["com.microsoft.VSCode"]))
         let policy = resolver.policy(for: "com.microsoft.VSCode")
+        #expect(!policy.denied)
         #expect(policy.llmAllowed)
         #expect(!policy.fieldAllowed)
         #expect(!policy.contextAllowed)
@@ -55,7 +45,7 @@ struct PolicyTests {
 
     @Test("The edit rung grants the field without granting the whole window")
     func editWithoutContext() {
-        let resolver = ModeResolver(config: makeConfig(llm: ["ed"], edit: ["ed"]))
+        let resolver = ModeResolver(config: makeConfig(edit: ["ed"]))
         let policy = resolver.policy(for: "ed")
         #expect(policy.llmAllowed)
         #expect(policy.fieldAllowed)
@@ -64,37 +54,22 @@ struct PolicyTests {
 
     @Test("Context opt-in implies field access — the window already contains the field")
     func contextImpliesField() {
-        let resolver = ModeResolver(config: makeConfig(llm: ["slack"], context: ["slack"]))
+        let resolver = ModeResolver(config: makeConfig(context: ["slack"]))
         let policy = resolver.policy(for: "slack")
         #expect(policy.fieldAllowed)
         #expect(policy.contextAllowed)
     }
 
-    @Test("The edit rung is inert without the LLM rung")
-    func editWithoutLLMIsInert() {
-        let resolver = ModeResolver(config: makeConfig(edit: ["ed"]))
-        #expect(!resolver.policy(for: "ed").fieldAllowed)
-    }
-
     @Test("Both lists together allow context")
     func llmWithContext() {
-        let resolver = ModeResolver(config: makeConfig(llm: ["slack"], context: ["slack"]))
-        #expect(resolver.policy(for: "slack").contextAllowed)
-    }
-
-    @Test("Context opt-in alone is inert — nothing would consume it")
-    func contextWithoutLLMIsInert() {
         let resolver = ModeResolver(config: makeConfig(context: ["slack"]))
-        let policy = resolver.policy(for: "slack")
-        #expect(!policy.llmAllowed)
-        #expect(!policy.contextAllowed)
+        #expect(resolver.policy(for: "slack").contextAllowed)
     }
 
     @Test("A hard deny beats every opt-in list")
     func denyWins() {
         let resolver = ModeResolver(
-            config: makeConfig(
-                llm: ["vault"], edit: ["vault"], context: ["vault"], denied: ["vault"]))
+            config: makeConfig(edit: ["vault"], context: ["vault"], denied: ["vault"]))
         let policy = resolver.policy(for: "vault")
         #expect(policy.denied)
         #expect(!policy.llmAllowed)
@@ -102,27 +77,14 @@ struct PolicyTests {
         #expect(!policy.contextAllowed)
     }
 
-    @Test("An opt-in on a wider rung without the LLM rung is reported as inert")
-    func inertOptInsReported() {
-        let resolver = ModeResolver(
-            config: makeConfig(llm: ["a"], edit: ["a", "b"], context: ["c"]))
-        // "a" is fine; "b" and "c" can never take effect.
-        #expect(resolver.inertOptIns == ["b", "c"])
-    }
-
-    @Test("A correctly laddered config reports nothing inert")
-    func noInertOptIns() {
-        let resolver = ModeResolver(
-            config: makeConfig(llm: ["a", "b"], edit: ["a", "b"], context: ["b"]))
-        #expect(resolver.inertOptIns.isEmpty)
-    }
-
-    @Test("An app with no bundle id is treated as not opted in")
-    func unknownAppIsNotOptedIn() {
-        let resolver = ModeResolver(config: makeConfig(llm: ["slack"]))
+    @Test("An app with no bundle id gets the transcript-only rung")
+    func unknownAppIsTranscriptOnly() {
+        let resolver = ModeResolver(config: makeConfig())
         let policy = resolver.policy(for: nil)
         #expect(!policy.denied)
-        #expect(!policy.llmAllowed)
+        #expect(policy.llmAllowed)
+        #expect(!policy.fieldAllowed)
+        #expect(!policy.contextAllowed)
     }
 }
 
@@ -218,6 +180,16 @@ struct PromptTests {
         #expect(prompt.hasPrefix("base"))
         #expect(!prompt.contains("<dictionary>"))
         #expect(prompt.contains("<editing>"))
+    }
+
+    @Test("Every system prompt says to keep the speaker's language")
+    func languageBlock() {
+        let resolver = ModeResolver(config: makeConfig())
+        for intent in [EditIntent.compose, .replaceSelection, .revise] {
+            let prompt = resolver.systemPrompt(for: Mode(name: "m", prompt: "base"), intent: intent)
+            #expect(prompt.contains("<language>"))
+            #expect(prompt.contains("Do not translate"))
+        }
     }
 
     @Test("Context is omitted entirely when the app has not opted in")

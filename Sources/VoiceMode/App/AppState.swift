@@ -18,6 +18,13 @@ struct Dictation: Identifiable {
     var method: InsertionMethod
     var timings: String
     var context: FieldContext
+    /// Everything the rewrite pass was given and produced. Nil on the raw path,
+    /// where there was no call — which is itself the answer to "why unchanged?".
+    var model: String?
+    var endpoint: String?
+    var systemPrompt: String?
+    var userMessage: String?
+    var thinking: String?
     /// The field's contents before a destructive action, so it can be put back.
     var previousFieldValue: String?
     /// Held so "re-insert" and "re-run" can target the same field.
@@ -38,6 +45,9 @@ final class AppState: ObservableObject {
         case idle
         case recording
         case transcribing
+        /// Only reached when the AX probe is still running at release. It starts on
+        /// key-down, so normally it has long finished and this never shows.
+        case readingContext
         /// `contextSent` drives the visible indicator required by §7.
         case rewriting(contextSent: Bool)
         case inserting
@@ -45,7 +55,31 @@ final class AppState: ObservableObject {
         case failed(String)
     }
 
+    /// Model preparation is deliberately *not* a `Phase`: it runs at launch,
+    /// outside any dictation, and pressing the hotkey while it happens must still
+    /// start a recording rather than be swallowed.
+    enum ModelStage: Equatable {
+        case downloading
+        case loading
+
+        var label: String {
+            switch self {
+            case .downloading: return "Downloading Whisper model…"
+            case .loading: return "Loading Whisper model…"
+            }
+        }
+
+        var detail: String {
+            switch self {
+            case .downloading: return "first run for this model · about 1.5 GB for large-v3"
+            case .loading: return "compiling for this Mac · one-off after a download"
+            }
+        }
+    }
+
     @Published private(set) var phase: Phase = .idle
+    /// Non-nil while the model is being fetched or compiled.
+    @Published private(set) var modelStage: ModelStage?
     @Published private(set) var history: [Dictation] = []
     @Published private(set) var lastContext: FieldContext?
     @Published private(set) var configError: String?
@@ -77,6 +111,9 @@ final class AppState: ObservableObject {
     /// Started on key-down so the AX traversal overlaps the recording instead of
     /// sitting in the post-release critical path.
     private var probeTask: Task<ProbeResult?, Never>?
+    /// Whether that task has already returned, so the pipeline only announces
+    /// "reading the app's text" when it is actually waiting on it.
+    private var probeFinished = false
     private var pipelineTask: Task<Void, Never>?
     private var levelTask: Task<Void, Never>?
     private var didBootstrap = false
@@ -93,6 +130,7 @@ final class AppState: ObservableObject {
             return Permissions.isGranted(.accessibility) ? "mic" : "exclamationmark.triangle"
         case .recording: return "mic.fill"
         case .transcribing: return "waveform"
+        case .readingContext: return "text.viewfinder"
         case let .rewriting(contextSent): return contextSent ? "paperplane.fill" : "wand.and.stars"
         case .inserting, .done: return "text.cursor"
         case .failed: return "exclamationmark.triangle.fill"
@@ -101,9 +139,16 @@ final class AppState: ObservableObject {
 
     var statusText: String {
         switch phase {
-        case .idle: return modelReady ? "Ready" : "Loading Whisper model…"
+        case .idle:
+            if let modelStage { return modelStage.label }
+            return modelReady ? "Ready" : "Preparing Whisper model…"
         case .recording: return "Recording…"
-        case .transcribing: return "Transcribing…"
+        // The transcribe call blocks on the same actor as the model load, so an
+        // unfinished prewarm shows up here rather than as its own phase.
+        case .transcribing:
+            if let modelStage { return modelStage.label }
+            return "Transcribing…"
+        case .readingContext: return "Reading the app's text…"
         case let .rewriting(contextSent):
             return contextSent
                 ? "Rewriting — sending screen context" : "Rewriting — transcript only"
@@ -134,6 +179,21 @@ final class AppState: ObservableObject {
         Task { await prewarmModel() }
     }
 
+    /// Probes the configured endpoint with the stored key and returns nil on
+    /// success, or a reason it failed. Used by the Setup health check.
+    @MainActor
+    func checkHealth() async -> String? {
+        await anthropic.healthCheck()
+    }
+
+    /// Persists a new rewrite model id and reloads.
+    @MainActor
+    func setModel(_ model: String) {
+        guard !model.isEmpty else { return }
+        ConfigStore.write { $0.model = model }
+        reloadConfig()
+    }
+
     func reloadConfig() {
         let (loaded, error) = ConfigStore.load()
         config = loaded
@@ -157,17 +217,19 @@ final class AppState: ObservableObject {
         if !badPatterns.isEmpty {
             problems.append("Unusable window title regex — \(badPatterns.joined(separator: "; "))")
         }
-        let inert = resolver.inertOptIns
-        if !inert.isEmpty {
-            problems.append(
-                "Listed for edits or context but not in llm_opt_in_bundle_ids, so inert — "
-                    + inert.joined(separator: ", "))
-        }
         configError = problems.isEmpty ? nil : problems.joined(separator: "\n")
         if let configError { log.error("config: \(configError, privacy: .public)") }
     }
 
     func prewarmModel() async {
+        // A first download is minutes long and otherwise looks like a hang, so it
+        // gets the overlay too, not just the menu.
+        modelStage = await transcriber.isDownloaded(model: config.whisperModel) ? .loading : .downloading
+        if modelStage == .downloading, case .idle = phase { showOverlayIfEnabled() }
+        defer {
+            modelStage = nil
+            if case .idle = phase { overlay.hide() }
+        }
         do {
             try await transcriber.prewarm(model: config.whisperModel)
             modelReady = true
@@ -186,7 +248,7 @@ final class AppState: ObservableObject {
         case .recording:
             // Hold: this is key repeat, ignore it. Toggle: this is the stop press.
             if config.hotkeyMode == .toggle { finishRecording() }
-        case .transcribing, .rewriting, .inserting:
+        case .transcribing, .readingContext, .rewriting, .inserting:
             // Another press while we are working means "never mind".
             cancel()
         }
@@ -238,10 +300,16 @@ final class AppState: ObservableObject {
         // cannot change while the user is holding the key.
         let contextCharCap = config.contextCharCap
         let fieldCharCap = config.fieldCharCap
+        probeFinished = false
         probeTask = Task { [contextProbe] in
-            guard !policy.denied else { return nil }
-            return await contextProbe.probe(
+            guard !policy.denied else {
+                self.probeFinished = true
+                return nil
+            }
+            let result = await contextProbe.probe(
                 target, contextCharCap: contextCharCap, fieldCharCap: fieldCharCap)
+            self.probeFinished = true
+            return result
         }
 
         // Same idea for the TLS handshake to the API.
@@ -298,7 +366,8 @@ final class AppState: ObservableObject {
 
         let transcript: String
         do {
-            transcript = try await transcriber.transcribe(samples, model: config.whisperModel)
+            transcript = try await transcriber.transcribe(
+                samples, model: config.whisperModel, language: config.whisperLanguage)
             watch.lap("transcribe")
         } catch {
             probeTask?.cancel()
@@ -309,8 +378,12 @@ final class AppState: ObservableObject {
         }
 
         // Almost certainly already finished — it has been running since key-down.
+        // Only say so when it has not, otherwise the label flickers past.
         var probed: ProbeResult?
-        if let probeTask { probed = await probeTask.value }
+        if let probeTask {
+            if !probeFinished { phase = .readingContext }
+            probed = await probeTask.value
+        }
         probeTask = nil
         guard !Task.isCancelled else { return }
 
@@ -344,7 +417,7 @@ final class AppState: ObservableObject {
         let intent = EditIntent.resolve(context: context, fieldAllowed: policy.fieldAllowed)
         activeIntent = intent
 
-        // Denied, or the app never opted in: raw transcript, nothing leaves the machine.
+        // Hard-denied app: raw transcript, nothing leaves the machine.
         guard policy.llmAllowed else {
             phase = .inserting
             // With a selection live, a plain insert replaces it — the same thing
@@ -353,7 +426,7 @@ final class AppState: ObservableObject {
             watch.lap("insert")
             finish(
                 Dictation(
-                    modeName: policy.denied ? "denied (raw)" : "not opted in (raw)",
+                    modeName: "denied (raw)",
                     raw: transcript, result: transcript,
                     contextSent: false, llmUsed: false,
                     intent: intent,
@@ -375,9 +448,9 @@ final class AppState: ObservableObject {
         }
 
         phase = .rewriting(contextSent: policy.contextAllowed)
-        let decision: EditDecision
+        let outcome: AnthropicClient.EditOutcome
         do {
-            decision = try await anthropic.edit(
+            outcome = try await anthropic.edit(
                 model: mode.model ?? config.model,
                 system: resolver.systemPrompt(for: mode, intent: intent),
                 user: resolver.userMessage(
@@ -412,6 +485,7 @@ final class AppState: ObservableObject {
         guard !Task.isCancelled else { return }
         phase = .inserting
 
+        let decision = outcome.decision
         let action = apply(intent: intent, decision: decision)
         let method: InsertionMethod
         switch action {
@@ -436,6 +510,9 @@ final class AppState: ObservableObject {
                 contextSent: policy.contextAllowed, llmUsed: true,
                 intent: intent, action: action, method: method,
                 timings: watch.summary, context: context,
+                model: outcome.model, endpoint: activeEndpoint.base.absoluteString,
+                systemPrompt: outcome.systemPrompt, userMessage: outcome.userMessage,
+                thinking: outcome.thinking,
                 previousFieldValue: context.fieldValue, focusedElement: element))
     }
 
@@ -463,7 +540,7 @@ final class AppState: ObservableObject {
         if history.count > historyLimit { history.removeLast(history.count - historyLimit) }
         lastResultPreview = dictation.result
         // Only offer to undo something we can actually put back.
-        revertable = dictation.canRevert && dictation.method != .aborted ? dictation : nil
+        revertable = dictation.canRevert && !dictation.method.failed ? dictation : nil
         log.info(
             """
             \(dictation.modeName, privacy: .public) via \(dictation.method.rawValue, privacy: .public) \
@@ -474,8 +551,14 @@ final class AppState: ObservableObject {
     private func finish(_ dictation: Dictation) {
         record(dictation)
         pipelineTask = nil
-        if dictation.method == .aborted {
-            fail("Insertion was blocked — a secure field took focus.")
+        if dictation.method.failed {
+            fail(
+                dictation.method == .notPermitted
+                    // The text is in History, so say that rather than just "denied".
+                    ? "Nothing was inserted: Accessibility is not granted to this build. "
+                        + "Re-add VoiceMode in System Settings → Privacy & Security → Accessibility. "
+                        + "The text is in History."
+                    : "Insertion was blocked — a secure field took focus.")
             return
         }
         phase = .done
@@ -539,8 +622,11 @@ final class AppState: ObservableObject {
             "reverted \(dictation.action.rawValue, privacy: .public) via \(method.rawValue, privacy: .public)"
         )
         revertable = nil
-        if method == .aborted {
-            fail("Could not revert — a secure field took focus.")
+        if method.failed {
+            fail(
+                method == .notPermitted
+                    ? "Could not revert — Accessibility is not granted to this build."
+                    : "Could not revert — a secure field took focus.")
         } else {
             phase = .done
             lastResultPreview = "Reverted"
@@ -568,7 +654,7 @@ final class AppState: ObservableObject {
                 // Re-runs always compose: the field has moved on since, so the
                 // original draft is no longer a safe thing to rewrite.
                 let policy = resolver.policy(for: dictation.context.bundleId)
-                let decision = try await anthropic.edit(
+                let outcome = try await anthropic.edit(
                     model: mode.model ?? config.model,
                     system: resolver.systemPrompt(for: mode, intent: .compose),
                     user: resolver.userMessage(
@@ -579,14 +665,18 @@ final class AppState: ObservableObject {
                 )
                 guard !Task.isCancelled else { return }
                 phase = .inserting
-                let method = inserter.insert(decision.text, into: dictation.focusedElement)
+                let method = inserter.insert(
+                    outcome.decision.text, into: dictation.focusedElement)
                 finish(
                     Dictation(
                         modeName: "\(mode.name) (re-run)", raw: dictation.raw,
-                        result: decision.text,
+                        result: outcome.decision.text,
                         contextSent: dictation.contextSent, llmUsed: true,
                         intent: .compose, action: .insert, method: method,
                         timings: "re-run", context: dictation.context,
+                        model: outcome.model, endpoint: activeEndpoint.base.absoluteString,
+                        systemPrompt: outcome.systemPrompt, userMessage: outcome.userMessage,
+                        thinking: outcome.thinking,
                         previousFieldValue: nil,
                         focusedElement: dictation.focusedElement))
             } catch {

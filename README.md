@@ -181,12 +181,12 @@ fields loads with defaults for the rest rather than refusing to start.
 | Field | Meaning |
 |---|---|
 | `whisper_model` | WhisperKit model. `base` downloads in seconds and is the right choice while wiring things up; switch to `large-v3-v20240930_turbo` once the pipeline works. |
+| `whisper_language` | Whisper language code (`"de"`, `"en"`). Omit it to detect the language per utterance — the right setting if you dictate in more than one. Pin it only if you always speak one language; detection costs a little accuracy on short utterances. |
 | `model` | Rewrite model. Per-mode override via `modes[].model`. |
 | `dictionary` | Proper nouns, ticket prefixes, jargon. Injected into every system prompt. |
 | `api_base_url` | Base URL for the Messages API. Gateway, proxy, or local mock; a path prefix is preserved. Invalid values fall back and are reported. |
 | `api_headers` | Extra request headers for gateways. The Keychain API key always wins. |
 | `hotkey_mode` | `hold` (push-to-talk) or `toggle` (press to start, press again to stop). |
-| `llm_opt_in_bundle_ids` | **Apps opt in.** Anything not listed gets the raw transcript inserted and nothing leaves the machine. |
 | `edit_opt_in_bundle_ids` | Middle rung: these apps may have the focused field's own text sent, which is what enables editing an existing draft. Implied by `context_opt_in_bundle_ids`. |
 | `context_opt_in_bundle_ids` | Widest: only these apps have their surrounding on-screen text sent. |
 | `denied_bundle_ids` | Hard deny. Not probed, not sent, raw transcript only. Wins over everything. |
@@ -197,21 +197,20 @@ fields loads with defaults for the rest rather than refusing to start.
 
 Mode resolution: bundle id → window title regex → the mode named `default`.
 A regex that doesn't compile is reported in the menu and the Setup window rather
-than silently never matching, as is a bundle id listed on a wider rung but missing
-from `llm_opt_in_bundle_ids` — which would otherwise look like a broken feature.
+than silently never matching.
 
 ## Privacy boundary
 
 Audio never leaves the machine. The rewrite pass does send data, and the
-config is built so that opting in is explicit at two levels:
+config is built so that reading anything beyond the transcript is explicit:
 
-- Not in `llm_opt_in_bundle_ids` → raw transcript inserted, **no API call at all**.
-- `llm_opt_in_bundle_ids` only → transcript only. Dictation can only append.
+- In `denied_bundle_ids` → raw transcript inserted, **no API call at all**.
+- Everywhere else → the transcript is sent for rewriting. Dictation can only append.
 - `+ edit_opt_in_bundle_ids` → **plus the focused field's own text and selection**,
   which is what makes editing a draft possible.
 - `+ context_opt_in_bundle_ids` → **plus whatever else is visible in the window**.
 
-Each rung is strictly wider than the last, and each requires the one below it.
+Each rung is strictly wider than the last.
 
 The overlay says "sending screen context" in words while such a request is in
 flight, the menu bar icon becomes a filled paper plane, and every history row is
@@ -318,6 +317,6 @@ Scripts/bundle.sh, Scripts/check.sh
    Jira/Confluence window-title mode are wired as examples in
    `config.example.json`. Every opt-in list ships empty.
 2. **Hold or toggle** — both, `hotkey_mode` picks. Default `hold`.
-3. **A local LLM pass for sensitive apps** — not wanted, so not built. Apps that
-   aren't opted in get the raw transcript inserted and make no API call. If it's
-   ever wanted, the seam is `policy.llmAllowed` in `AppState.runPipeline`.
+3. **A local LLM pass for sensitive apps** — not wanted, so not built. Denied apps
+   get the raw transcript inserted and make no API call. If it's ever wanted, the
+   seam is `policy.llmAllowed` in `AppState.runPipeline`.

@@ -28,12 +28,26 @@ for bundle in "$BIN_DIR"/*.bundle; do
 done
 shopt -u nullglob
 
-# Ad-hoc sign with a stable identifier so the Accessibility grant survives a
-# rebuild more often than not. It is not a substitute for a Developer ID:
-# expect to re-toggle the Accessibility switch after some rebuilds.
-codesign --force --sign - \
+# TCC ties permission grants to the code signature. A stable signing identity
+# (self-signed cert named "VoiceMode Dev", or $CODESIGN_IDENTITY) keeps the
+# microphone/Accessibility grants across rebuilds; ad-hoc (-) loses them.
+#
+# The entitlements are not optional: --options runtime without
+# com.apple.security.device.audio-input means the microphone request is denied
+# before it reaches the user, with no prompt and no error.
+IDENTITY="${CODESIGN_IDENTITY:-}"
+if [[ -z "$IDENTITY" ]] && security find-identity -v -p codesigning 2>/dev/null | grep -q "VoiceMode Dev"; then
+	IDENTITY="VoiceMode Dev"
+fi
+if [[ -z "$IDENTITY" ]]; then
+	IDENTITY="-"
+	echo "warning: no signing identity — permissions reset every rebuild." >&2
+	echo "warning: create a self-signed 'Code Signing' cert named 'VoiceMode Dev' in Keychain Access." >&2
+fi
+codesign --force --sign "$IDENTITY" \
 	--identifier com.wormtongue.voicemode \
 	--options runtime \
+	--entitlements "$ROOT/Resources/VoiceMode.entitlements" \
 	--timestamp=none \
 	"$APP" >/dev/null
 

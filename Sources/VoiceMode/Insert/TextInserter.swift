@@ -8,6 +8,10 @@ enum InsertionMethod: String {
     case paste = "paste"
     case selectAllPaste = "select-all+paste"
     case aborted = "aborted"
+    case notPermitted = "no-accessibility"
+
+    /// Nothing reached the field, so the pipeline must not report success.
+    var failed: Bool { self == .aborted || self == .notPermitted }
 }
 
 /// Puts text into the focused field.
@@ -26,8 +30,15 @@ final class TextInserter {
     private var savedPasteboard: [[NSPasteboard.PasteboardType: Data]]?
     private var restoreTask: Task<Void, Never>?
 
+    /// Both paths out of here need Accessibility: the AX write obviously, and the
+    /// paste because `CGEvent.post` is dropped silently for an untrusted process.
+    /// Without this check a stale grant — which every ad-hoc rebuild can cause —
+    /// looks like a successful dictation that inserts nothing.
+    private var canReachTheField: Bool { AXIsProcessTrusted() }
+
     func insert(_ text: String, into element: AXUIElement?) -> InsertionMethod {
         guard !text.isEmpty else { return .aborted }
+        guard canReachTheField else { return .notPermitted }
         // Re-check: a password field may have taken focus while we were working.
         if Permissions.secureInputEnabled {
             log.notice("insertion aborted: secure input is enabled")
@@ -52,6 +63,7 @@ final class TextInserter {
     ///      is not "select all in this field".
     func replaceAll(with text: String, in element: AXUIElement?) -> InsertionMethod {
         guard !text.isEmpty else { return .aborted }
+        guard canReachTheField else { return .notPermitted }
         if Permissions.secureInputEnabled {
             log.notice("whole-field replacement aborted: secure input is enabled")
             return .aborted
@@ -88,6 +100,7 @@ final class TextInserter {
     ) -> InsertionMethod {
         guard characterCount > 0 else { return insert(text, into: element) }
         if Permissions.secureInputEnabled { return .aborted }
+        guard canReachTheField else { return .notPermitted }
         for _ in 0..<characterCount {
             tap(keyCode: CGKeyCode(kVK_Delete), flags: [])
         }

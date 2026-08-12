@@ -74,6 +74,14 @@ public struct Config: Codable, Sendable, Equatable {
     /// WhisperKit model name. Start with "base" — it downloads in seconds.
     /// Move to "large-v3-v20240930_turbo" once the pipeline works.
     public var whisperModel: String
+    /// Whisper language code ("en", "de", …). `nil` — the default — detects the
+    /// language per utterance, which is what a bilingual speaker wants. Pin it
+    /// only if you always dictate in one language: detection costs a little
+    /// accuracy on short utterances.
+    ///
+    /// Not passing anything is *not* the same as auto-detect: WhisperKit's own
+    /// defaults force `<|en|>`, so German would be decoded as English.
+    public var whisperLanguage: String?
 
     // MARK: Context and privacy
 
@@ -86,9 +94,6 @@ public struct Config: Codable, Sendable, Equatable {
     /// Proper nouns, ticket prefixes, internal jargon. Injected into every
     /// system prompt — the cheap substitute for fine-tuning.
     public var dictionary: [String]
-    /// Denylist is on by default: apps opt IN to the rewrite pass. Anything
-    /// not listed here gets the raw transcript inserted, nothing leaves the machine.
-    public var llmOptInBundleIds: [String]
     /// Apps allowed to have the *focused field's own* content sent. This is what
     /// enables editing an existing draft — replacing a selection, or acting on an
     /// instruction like "make that more formal" — because none of that is possible
@@ -120,7 +125,6 @@ public struct Config: Codable, Sendable, Equatable {
         contextCharCap: 4000,
         fieldCharCap: 4000,
         dictionary: [],
-        llmOptInBundleIds: [],
         editOptInBundleIds: [],
         contextOptInBundleIds: [],
         deniedBundleIds: [
@@ -150,9 +154,9 @@ public struct Config: Codable, Sendable, Equatable {
         case apiBaseURL = "api_base_url"
         case apiHeaders = "api_headers"
         case whisperModel = "whisper_model"
+        case whisperLanguage = "whisper_language"
         case contextCharCap = "context_char_cap"
         case fieldCharCap = "field_char_cap"
-        case llmOptInBundleIds = "llm_opt_in_bundle_ids"
         case editOptInBundleIds = "edit_opt_in_bundle_ids"
         case contextOptInBundleIds = "context_opt_in_bundle_ids"
         case deniedBundleIds = "denied_bundle_ids"
@@ -171,12 +175,12 @@ public struct Config: Codable, Sendable, Equatable {
         apiHeaders =
             try c.decodeIfPresent([String: String].self, forKey: .apiHeaders) ?? d.apiHeaders
         whisperModel = try c.decodeIfPresent(String.self, forKey: .whisperModel) ?? d.whisperModel
+        // Absent means auto-detect, so there is no fallback to apply here.
+        whisperLanguage = try c.decodeIfPresent(String.self, forKey: .whisperLanguage)
         contextCharCap =
             try c.decodeIfPresent(Int.self, forKey: .contextCharCap) ?? d.contextCharCap
         fieldCharCap = try c.decodeIfPresent(Int.self, forKey: .fieldCharCap) ?? d.fieldCharCap
         dictionary = try c.decodeIfPresent([String].self, forKey: .dictionary) ?? d.dictionary
-        llmOptInBundleIds =
-            try c.decodeIfPresent([String].self, forKey: .llmOptInBundleIds) ?? d.llmOptInBundleIds
         editOptInBundleIds =
             try c.decodeIfPresent([String].self, forKey: .editOptInBundleIds)
             ?? d.editOptInBundleIds
@@ -202,10 +206,10 @@ public struct Config: Codable, Sendable, Equatable {
         apiBaseURL: String,
         apiHeaders: [String: String],
         whisperModel: String,
+        whisperLanguage: String? = nil,
         contextCharCap: Int,
         fieldCharCap: Int,
         dictionary: [String],
-        llmOptInBundleIds: [String],
         editOptInBundleIds: [String],
         contextOptInBundleIds: [String],
         deniedBundleIds: [String],
@@ -220,10 +224,10 @@ public struct Config: Codable, Sendable, Equatable {
         self.apiBaseURL = apiBaseURL
         self.apiHeaders = apiHeaders
         self.whisperModel = whisperModel
+        self.whisperLanguage = whisperLanguage
         self.contextCharCap = contextCharCap
         self.fieldCharCap = fieldCharCap
         self.dictionary = dictionary
-        self.llmOptInBundleIds = llmOptInBundleIds
         self.editOptInBundleIds = editOptInBundleIds
         self.contextOptInBundleIds = contextOptInBundleIds
         self.deniedBundleIds = deniedBundleIds
@@ -262,7 +266,6 @@ extension Config {
         contextCharCap: 4000,
         fieldCharCap: 4000,
         dictionary: [],
-        llmOptInBundleIds: [],
         editOptInBundleIds: [],
         contextOptInBundleIds: [],
         deniedBundleIds: Config.fallback.deniedBundleIds,

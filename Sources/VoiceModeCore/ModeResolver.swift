@@ -34,7 +34,6 @@ public struct Policy: Sendable, Equatable {
 public struct ModeResolver: Sendable {
     public let config: Config
 
-    private let llmOptIn: Set<String>
     private let editOptIn: Set<String>
     private let contextOptIn: Set<String>
     private let denied: Set<String>
@@ -45,7 +44,6 @@ public struct ModeResolver: Sendable {
 
     public init(config: Config) {
         self.config = config
-        self.llmOptIn = Set(config.llmOptInBundleIds)
         self.editOptIn = Set(config.editOptInBundleIds)
         self.contextOptIn = Set(config.contextOptInBundleIds)
         self.denied = Set(config.deniedBundleIds)
@@ -97,34 +95,27 @@ public struct ModeResolver: Sendable {
         }
     }
 
-    /// Bundle ids listed on a wider rung but missing from `llmOptInBundleIds`, which
-    /// makes them inert: every rung above the first is meaningless without the
-    /// rewrite pass to consume it. Silence here would look like a broken feature.
-    public var inertOptIns: [String] {
-        editOptIn.union(contextOptIn).subtracting(llmOptIn).sorted()
-    }
-
     // MARK: - Policy
 
     public func policy(for bundleId: String?) -> Policy {
-        // An app we cannot identify is treated as not opted in.
+        // The rewrite pass runs everywhere except hard-denied apps; only reading
+        // the field or the screen still requires an opt-in.
         guard let bundleId else {
+            // An app we cannot identify gets the transcript-only rung.
             return Policy(
-                denied: false, llmAllowed: false, fieldAllowed: false, contextAllowed: false)
+                denied: false, llmAllowed: true, fieldAllowed: false, contextAllowed: false)
         }
         if denied.contains(bundleId) {
             return Policy(
                 denied: true, llmAllowed: false, fieldAllowed: false, contextAllowed: false)
         }
-        let llm = llmOptIn.contains(bundleId)
         // Sending the whole window already includes the field inside it, so
         // context opt-in implies field opt-in.
-        let context = llm && contextOptIn.contains(bundleId)
+        let context = contextOptIn.contains(bundleId)
         return Policy(
             denied: false,
-            llmAllowed: llm,
-            fieldAllowed: llm && (context || editOptIn.contains(bundleId)),
-            // Context without a rewrite pass is meaningless — nothing would consume it.
+            llmAllowed: true,
+            fieldAllowed: context || editOptIn.contains(bundleId),
             contextAllowed: context
         )
     }
@@ -154,9 +145,19 @@ public struct ModeResolver: Sendable {
     public func systemPrompt(for mode: Mode, intent: EditIntent = .compose) -> String {
         var parts = [mode.prompt]
         if let dictionaryBlock { parts.append(dictionaryBlock) }
+        parts.append(Self.languageBlock)
         parts.append(Self.editingBlock(for: intent))
         return parts.joined(separator: "\n\n")
     }
+
+    /// Mode prompts are written in English, which is enough on its own to pull a
+    /// German transcript into English. Say so explicitly instead.
+    static let languageBlock = """
+        <language>
+        Write in the language the speaker used. Do not translate. If the
+        dictation mixes languages, keep the mix as spoken.
+        </language>
+        """
 
     static func editingBlock(for intent: EditIntent) -> String {
         switch intent {

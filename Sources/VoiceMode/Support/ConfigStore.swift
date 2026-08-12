@@ -27,6 +27,16 @@ enum ConfigStore {
         }
     }
 
+    /// Loads, mutates in place, and writes back. Keeps the file as the single
+    /// source of truth while letting the UI persist small edits like the model.
+    static func write(_ mutate: (inout Config) -> Void) {
+        var config = load().config
+        mutate(&config)
+        if let data = try? config.encoded() {
+            try? data.write(to: url, options: .atomic)
+        }
+    }
+
     private static func seed() throws {
         try FileManager.default.createDirectory(
             at: url.deletingLastPathComponent(), withIntermediateDirectories: true)

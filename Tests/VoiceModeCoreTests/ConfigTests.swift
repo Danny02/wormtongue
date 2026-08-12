@@ -21,6 +21,13 @@ struct ConfigTests {
         #expect(config.modes.count == 1)
     }
 
+    @Test("An absent whisper_language means auto-detect, not English")
+    func languageDefaultsToAutoDetect() throws {
+        #expect(try Config.decode(Data("{}".utf8)).whisperLanguage == nil)
+        let pinned = try Config.decode(Data(#"{ "whisper_language": "de" }"#.utf8))
+        #expect(pinned.whisperLanguage == "de")
+    }
+
     @Test("snake_case keys map onto camelCase properties")
     func snakeCaseKeys() throws {
         let json = """
@@ -28,7 +35,6 @@ struct ConfigTests {
               "max_tokens": 42,
               "context_char_cap": 99,
               "field_char_cap": 55,
-              "llm_opt_in_bundle_ids": ["a"],
               "edit_opt_in_bundle_ids": ["e"],
               "context_opt_in_bundle_ids": ["b"],
               "denied_bundle_ids": ["c"],
@@ -42,7 +48,6 @@ struct ConfigTests {
         #expect(config.maxTokens == 42)
         #expect(config.contextCharCap == 99)
         #expect(config.fieldCharCap == 55)
-        #expect(config.llmOptInBundleIds == ["a"])
         #expect(config.editOptInBundleIds == ["e"])
         #expect(config.contextOptInBundleIds == ["b"])
         #expect(config.deniedBundleIds == ["c"])
@@ -99,7 +104,6 @@ struct ConfigTests {
         config.contextCharCap = 111
         config.fieldCharCap = 222
         config.dictionary = ["Heiko"]
-        config.llmOptInBundleIds = ["llm.app"]
         config.editOptInBundleIds = ["edit.app"]
         config.contextOptInBundleIds = ["ctx.app"]
         config.deniedBundleIds = ["denied.app"]
@@ -124,9 +128,8 @@ struct ConfigTests {
 
         #expect(config.modes.contains { $0.name == "slack" })
         #expect(config.modes.contains { $0.name == "default" })
-        // Slack may see context; VS Code gets the LLM pass but no screen text.
+        // Slack may see context; VS Code may not.
         #expect(config.contextOptInBundleIds == ["com.tinyspeck.slackmacgap"])
-        #expect(config.llmOptInBundleIds.contains("com.microsoft.VSCode"))
         #expect(!config.contextOptInBundleIds.contains("com.microsoft.VSCode"))
         // VS Code may edit its own field without the whole window being sent.
         #expect(config.editOptInBundleIds.contains("com.microsoft.VSCode"))

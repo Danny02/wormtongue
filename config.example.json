@@ -9,6 +9,9 @@
   "//hotkey": "hold = push-to-talk. toggle = press to start, press again to stop.",
   "hotkey_mode": "hold",
   "whisper_model": "base",
+
+  "//language": "Whisper language code. Leave this key out to detect the language per utterance, which is what you want if you dictate in more than one. Pinning it ('de', 'en') is slightly more accurate on short utterances.",
+
   "context_char_cap": 4000,
   "field_char_cap": 4000,
 
@@ -20,11 +23,7 @@
     "Jira"
   ],
 
-  "//": "Denylist is ON by default: apps opt IN. Anything not listed here gets the raw transcript and nothing leaves the machine.",
-  "llm_opt_in_bundle_ids": [
-    "com.tinyspeck.slackmacgap",
-    "com.microsoft.VSCode"
-  ],
+  "//": "The rewrite pass runs for every app except denied_bundle_ids. Only reading the field or the screen needs an opt-in below.",
 
   "//edit": "Middle rung: these apps may have the FOCUSED FIELD's own text sent, which is what lets dictation modify an existing draft instead of only appending. Implied by context_opt_in_bundle_ids.",
   "edit_opt_in_bundle_ids": [
