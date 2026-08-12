@@ -6,7 +6,7 @@ import Security
 /// `ANTHROPIC_API_KEY` is honoured as a read-only fallback so `swift run` works
 /// before the Keychain item exists.
 enum Keychain {
-    private static let service = "com.wormtongue.voicemode"
+    private static let service = "com.wormtongue.wormtongue"
     private static let account = "anthropic-api-key"
 
     static func apiKey() -> String? {

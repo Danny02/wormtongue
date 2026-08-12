@@ -2,7 +2,7 @@ import AppKit
 import SwiftUI
 
 @main
-struct VoiceModeApp: App {
+struct WormtongueApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var delegate
     @StateObject private var state = AppState.shared
 
@@ -15,7 +15,7 @@ struct VoiceModeApp: App {
         }
         .menuBarExtraStyle(.menu)
 
-        Window("VoiceMode Setup", id: WindowID.setup) {
+        Window("Wormtongue Setup", id: WindowID.setup) {
             SetupView()
                 .environmentObject(state)
         }

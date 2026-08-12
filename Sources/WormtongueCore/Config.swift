@@ -47,7 +47,7 @@ public enum HotkeyMode: String, Codable, Sendable, Equatable {
     case toggle
 }
 
-/// JSON at ~/.config/voicemode/config.json.
+/// JSON at ~/.config/wormtongue/config.json.
 ///
 /// The brief allowed TOML or JSON; JSON avoids pulling in a TOML parser
 /// dependency for a file only this app reads.

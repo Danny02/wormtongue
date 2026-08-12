@@ -10,7 +10,7 @@ actor Transcriber {
     private var loadedModel: String?
     private(set) var isLoading = false
 
-    /// Where model weights live: ~/Library/Application Support/VoiceMode/models.
+    /// Where model weights live: ~/Library/Application Support/Wormtongue/models.
     ///
     /// WhisperKit's default is ~/Documents/huggingface, which is a TCC-protected
     /// folder. Without that grant the download half-succeeds and then fails on the
@@ -18,7 +18,7 @@ actor Transcriber {
     /// sends you looking for the wrong problem. Application Support needs no grant.
     static let downloadBase: URL = {
         let base = FileManager.default.homeDirectoryForCurrentUser
-            .appending(path: "Library/Application Support/VoiceMode/models")
+            .appending(path: "Library/Application Support/Wormtongue/models")
         try? FileManager.default.createDirectory(at: base, withIntermediateDirectories: true)
         return base
     }()

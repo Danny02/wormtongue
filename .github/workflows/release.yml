@@ -2,20 +2,20 @@ name: Release
 
 # Builds the macOS app and attaches the .app bundle to a GitHub Release.
 #
-# Trigger: push a version tag, e.g.
-#
-#     git tag v0.1.0 && git push origin v0.1.0
+# Trigger: publish a Release on github.com (Releases → Draft a new release) and
+# pick an existing tag, then choose "Publish release". The runner builds and
+# attaches the binary to that release.
 #
 # The runner is an Apple machine because the app target needs AppKit,
 # Accessibility, AVFoundation, and WhisperKit, none of which build on Linux.
-# No "VoiceMode Dev" cert exists on CI, so the app is signed ad-hoc (-). Users
+# No "Wormtongue Dev" cert exists on CI, so the app is signed ad-hoc (-). Users
 # downloading it will get a Gatekeeper "unidentified developer" prompt and need
 # to right-click → Open the first time.
 
 on:
-  push:
-    tags:
-      - "v*"
+  release:
+    types:
+      - published
 
 jobs:
   build-and-release:
@@ -36,8 +36,8 @@ jobs:
       - name: Package app bundle
         run: |
           VERSION="${GITHUB_REF_NAME#v}"
-          ZIP="VoiceMode-macOS-${VERSION}.zip"
-          ditto -c -k --sequesterRsrc --keepParent build/VoiceMode.app "$ZIP"
+          ZIP="Wormtongue-macOS-${VERSION}.zip"
+          ditto -c -k --sequesterRsrc --keepParent build/Wormtongue.app "$ZIP"
           echo "artifact=$ZIP" >> "$GITHUB_ENV"
           echo "Built $ZIP ($(du -h "$ZIP" | cut -f1))"
 

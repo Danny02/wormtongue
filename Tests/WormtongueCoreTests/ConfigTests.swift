@@ -1,7 +1,7 @@
 import Foundation
 import Testing
 
-@testable import VoiceModeCore
+@testable import WormtongueCore
 
 @Suite("Config decoding")
 struct ConfigTests {
@@ -118,7 +118,7 @@ struct ConfigTests {
 
     @Test("The shipped example config parses and matches its documented intent")
     func exampleConfigParses() throws {
-        // Walk up from Tests/VoiceModeCoreTests/ to the package root.
+        // Walk up from Tests/WormtongueCoreTests/ to the package root.
         let root = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()
             .deletingLastPathComponent()

@@ -1,6 +1,6 @@
 import AppKit
 import ApplicationServices
-import VoiceModeCore
+import WormtongueCore
 
 /// The platform-free `FieldContext` plus the live element, so the inserter can
 /// reuse it instead of re-walking the tree.
@@ -24,7 +24,7 @@ final class ContextProbe {
     private let axMessagingTimeout: Float = 0.25
 
     private let queue = DispatchQueue(
-        label: "com.wormtongue.voicemode.axprobe", qos: .userInitiated)
+        label: "com.wormtongue.wormtongue.axprobe", qos: .userInitiated)
 
     /// Bridged once, not per node — `[String] as CFArray` allocates.
     private let nodeAttributes: CFArray =

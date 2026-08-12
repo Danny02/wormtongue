@@ -5,13 +5,13 @@
 	<key>CFBundleDevelopmentRegion</key>
 	<string>en</string>
 	<key>CFBundleExecutable</key>
-	<string>VoiceMode</string>
+	<string>Wormtongue</string>
 	<key>CFBundleIdentifier</key>
-	<string>com.wormtongue.voicemode</string>
+	<string>com.wormtongue.wormtongue</string>
 	<key>CFBundleInfoDictionaryVersion</key>
 	<string>6.0</string>
 	<key>CFBundleName</key>
-	<string>VoiceMode</string>
+	<string>Wormtongue</string>
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
@@ -25,7 +25,7 @@
 	<key>LSUIElement</key>
 	<true/>
 	<key>NSMicrophoneUsageDescription</key>
-	<string>VoiceMode records audio while you hold the dictation hotkey. Audio is transcribed on this Mac and is never uploaded.</string>
+	<string>Wormtongue records audio while you hold the dictation hotkey. Audio is transcribed on this Mac and is never uploaded.</string>
 	<key>NSHighResolutionCapable</key>
 	<true/>
 </dict>

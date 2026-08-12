@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Assembles VoiceMode.app around the SPM executable.
+# Assembles Wormtongue.app around the SPM executable.
 #
 # An SPM executable is a bare binary, and a bare binary cannot carry an
 # Info.plist — which means no LSUIElement and no microphone usage description,
@@ -8,15 +8,15 @@ set -euo pipefail
 
 CONFIG="${1:-release}"
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-APP="$ROOT/build/VoiceMode.app"
+APP="$ROOT/build/Wormtongue.app"
 
 cd "$ROOT"
 swift build -c "$CONFIG"
-BIN="$(swift build -c "$CONFIG" --show-bin-path)/VoiceMode"
+BIN="$(swift build -c "$CONFIG" --show-bin-path)/Wormtongue"
 
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
-cp "$BIN" "$APP/Contents/MacOS/VoiceMode"
+cp "$BIN" "$APP/Contents/MacOS/Wormtongue"
 cp "$ROOT/Resources/Info.plist" "$APP/Contents/Info.plist"
 
 # WhisperKit ships CoreML resource bundles next to the binary; the app bundle
@@ -45,11 +45,11 @@ if [[ -z "$IDENTITY" ]]; then
 	echo "warning: create a self-signed 'Code Signing' cert named 'VoiceMode Dev' in Keychain Access." >&2
 fi
 codesign --force --sign "$IDENTITY" \
-	--identifier com.wormtongue.voicemode \
+	--identifier com.wormtongue.wormtongue \
 	--options runtime \
-	--entitlements "$ROOT/Resources/VoiceMode.entitlements" \
+	--entitlements "$ROOT/Resources/Wormtongue.entitlements" \
 	--timestamp=none \
 	"$APP" >/dev/null
 
 echo "Built $APP"
-echo "Run it with: open '$APP'   (or '$APP/Contents/MacOS/VoiceMode' to see logs)"
+echo "Run it with: open '$APP'   (or '$APP/Contents/MacOS/Wormtongue' to see logs)"

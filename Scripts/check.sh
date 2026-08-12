@@ -4,7 +4,7 @@
 # The app target needs AppKit, Accessibility, AVFoundation, and WhisperKit, none
 # of which exist on Linux — so it cannot be type-checked here. What can:
 #
-#   1. VoiceModeCore builds, and its test suite runs.
+#   1. WormtongueCore builds, and its test suite runs.
 #   2. Every source file parses (catches syntax errors in the app target too).
 #   3. swift-format lint agrees with the house style.
 #   4. Structural rules that the Core/app split depends on.
@@ -20,10 +20,10 @@ step() { printf '\n\033[1m== %s\033[0m\n' "$1"; }
 fail() { printf '\033[31mFAIL\033[0m %s\n' "$1"; status=1; }
 ok() { printf '\033[32mok\033[0m   %s\n' "$1"; }
 
-step "VoiceModeCore builds"
+step "WormtongueCore builds"
 if swift build 2>&1 | tail -5; then ok "build"; else fail "build"; fi
 
-step "VoiceModeCore tests"
+step "WormtongueCore tests"
 if swift test 2>&1 | tail -3; then ok "tests"; else fail "tests"; fi
 
 step "Every source file parses"
@@ -47,7 +47,7 @@ fi
 step "Core stays platform-free"
 # If Core ever imports a macOS framework, it stops building on Linux and the
 # tests stop running — which is the whole point of the split.
-if banned=$(grep -rlE '^import (AppKit|SwiftUI|ApplicationServices|AVFoundation|Carbon|IOKit|WhisperKit|KeyboardShortcuts|os)$' Sources/VoiceModeCore 2>/dev/null); then
+if banned=$(grep -rlE '^import (AppKit|SwiftUI|ApplicationServices|AVFoundation|Carbon|IOKit|WhisperKit|KeyboardShortcuts|os)$' Sources/WormtongueCore 2>/dev/null); then
 	fail "Core imports a platform framework:"
 	echo "$banned"
 else
@@ -56,10 +56,10 @@ fi
 
 step "App files that use Core types import it"
 missing=0
-for file in $(find Sources/VoiceMode -name '*.swift'); do
+for file in $(find Sources/Wormtongue -name '*.swift'); do
 	if grep -qE '\b(Config|Mode|ModeResolver|Policy|FieldContext|TailBuffer|Stopwatch|AnthropicMessages|AnthropicError)\b' "$file" \
-		&& ! grep -q '^import VoiceModeCore$' "$file"; then
-		fail "missing 'import VoiceModeCore': $file"
+		&& ! grep -q '^import WormtongueCore$' "$file"; then
+		fail "missing 'import WormtongueCore': $file"
 		missing=$((missing + 1))
 	fi
 done
@@ -69,12 +69,12 @@ step "Overlay cannot steal focus"
 # makeKeyAndOrderFront on the overlay panel would move the keyboard away from the
 # field we are about to type into, which breaks the entire app. Match the call,
 # not the word — the source mentions it by name in a comment explaining why not.
-if grep -rn 'makeKeyAndOrderFront(' Sources/VoiceMode/App/Overlay >/dev/null 2>&1; then
+if grep -rn 'makeKeyAndOrderFront(' Sources/Wormtongue/App/Overlay >/dev/null 2>&1; then
 	fail "overlay calls makeKeyAndOrderFront; it must use orderFrontRegardless"
 else
 	ok "overlay uses orderFrontRegardless"
 fi
-if grep -q 'nonactivatingPanel' Sources/VoiceMode/App/Overlay/OverlayController.swift; then
+if grep -q 'nonactivatingPanel' Sources/Wormtongue/App/Overlay/OverlayController.swift; then
 	ok "overlay panel is non-activating"
 else
 	fail "overlay panel is missing .nonactivatingPanel"
@@ -90,7 +90,7 @@ if not plist.get("LSUIElement"):
     problems.append("LSUIElement must be true (menu-bar only, no focus stealing)")
 if not plist.get("NSMicrophoneUsageDescription"):
     problems.append("NSMicrophoneUsageDescription missing; macOS will not prompt for the mic")
-if plist.get("CFBundleExecutable") != "VoiceMode":
+if plist.get("CFBundleExecutable") != "Wormtongue":
     problems.append("CFBundleExecutable must match the built binary name")
 for problem in problems:
     print(problem)

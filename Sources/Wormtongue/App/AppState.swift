@@ -3,7 +3,7 @@ import ApplicationServices
 import Combine
 import Foundation
 import KeyboardShortcuts
-import VoiceModeCore
+import WormtongueCore
 
 struct Dictation: Identifiable {
     let id = UUID()
@@ -556,7 +556,7 @@ final class AppState: ObservableObject {
                 dictation.method == .notPermitted
                     // The text is in History, so say that rather than just "denied".
                     ? "Nothing was inserted: Accessibility is not granted to this build. "
-                        + "Re-add VoiceMode in System Settings → Privacy & Security → Accessibility. "
+                        + "Re-add Wormtongue in System Settings → Privacy & Security → Accessibility. "
                         + "The text is in History."
                     : "Insertion was blocked — a secure field took focus.")
             return

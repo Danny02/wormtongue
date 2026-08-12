@@ -1,7 +1,7 @@
 import Foundation
 import Testing
 
-@testable import VoiceModeCore
+@testable import WormtongueCore
 
 @Suite("Context tail buffer")
 struct TailBufferTests {

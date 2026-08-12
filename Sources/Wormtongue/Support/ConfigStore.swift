@@ -1,10 +1,10 @@
 import Foundation
-import VoiceModeCore
+import WormtongueCore
 
 enum ConfigStore {
     static var url: URL {
         FileManager.default.homeDirectoryForCurrentUser
-            .appending(path: ".config/voicemode/config.json")
+            .appending(path: ".config/wormtongue/config.json")
     }
 
     /// Loads the config, seeding the file from the built-in example on first run.

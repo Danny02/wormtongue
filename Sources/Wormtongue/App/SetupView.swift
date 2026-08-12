@@ -1,7 +1,7 @@
 import Combine
 import KeyboardShortcuts
 import SwiftUI
-import VoiceModeCore
+import WormtongueCore
 
 /// First-run checklist. Getting permissions wrong is the #1 way this app looks
 /// broken, so every one of them gets a live status dot and a deep link.
@@ -185,7 +185,7 @@ struct SetupView: View {
 
     private var header: some View {
         VStack(alignment: .leading, spacing: 4) {
-            Text("VoiceMode").font(.title2).bold()
+            Text("Wormtongue").font(.title2).bold()
             Text(
                 "Audio is transcribed on-device. The rewrite pass sends the transcript — and, for apps you opt in, the surrounding on-screen text — to the Anthropic API."
             )
@@ -228,7 +228,7 @@ struct SetupView: View {
                 Text(
                     "Switched on in System Settings but still grey here? The grant is bound to "
                         + "the app's signature, and every rebuild re-signs this bundle. Remove the "
-                        + "old VoiceMode entry from the list, then add this exact bundle back:"
+                        + "old Wormtongue entry from the list, then add this exact bundle back:"
                 )
                 .font(.caption)
                 .foregroundStyle(.secondary)

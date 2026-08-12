@@ -1,5 +1,5 @@
 import SwiftUI
-import VoiceModeCore
+import WormtongueCore
 
 struct OverlayView: View {
     @EnvironmentObject private var state: AppState

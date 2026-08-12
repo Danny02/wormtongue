@@ -1,6 +1,6 @@
 import AppKit
 import SwiftUI
-import VoiceModeCore
+import WormtongueCore
 
 struct MenuBarView: View {
     @EnvironmentObject private var state: AppState
@@ -50,7 +50,7 @@ struct MenuBarView: View {
 
         Divider()
 
-        Button("Quit VoiceMode") { NSApp.terminate(nil) }
+        Button("Quit Wormtongue") { NSApp.terminate(nil) }
             .keyboardShortcut("q")
     }
 }

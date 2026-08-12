@@ -1,5 +1,5 @@
 import SwiftUI
-import VoiceModeCore
+import WormtongueCore
 
 /// Last N dictations, with re-insert and re-run-under-a-different-mode. This is
 /// the debugging surface: it shows what the transcript was, what the LLM did to

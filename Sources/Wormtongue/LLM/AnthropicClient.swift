@@ -1,9 +1,9 @@
 import Foundation
-import VoiceModeCore
+import WormtongueCore
 
 /// A single stateless completion per utterance over `POST /v1/messages`.
 ///
-/// Wire types and response parsing live in `VoiceModeCore.AnthropicMessages` so
+/// Wire types and response parsing live in `WormtongueCore.AnthropicMessages` so
 /// they can be unit-tested; this is the transport.
 actor AnthropicClient {
     private let session: URLSession

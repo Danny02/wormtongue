@@ -4,10 +4,10 @@ import PackageDescription
 // The package is split so the parts with real edge cases can be built and tested
 // off a Mac:
 //
-//   VoiceModeCore — Foundation only. Config decoding, mode resolution, the
+//   WormtongueCore — Foundation only. Config decoding, mode resolution, the
 //                   privacy policy, prompt assembly, the context tail buffer,
 //                   and Anthropic request/response coding. Has tests.
-//   VoiceMode     — the app. AppKit, Accessibility, AVFoundation, WhisperKit.
+//   Wormtongue     — the app. AppKit, Accessibility, AVFoundation, WhisperKit.
 //
 // The macOS target and its dependencies are declared only when the manifest is
 // evaluated on macOS. Package.swift is ordinary Swift code, so on Linux the
@@ -23,9 +23,9 @@ import PackageDescription
 
     let platformTargets: [Target] = [
         .executableTarget(
-            name: "VoiceMode",
+            name: "Wormtongue",
             dependencies: [
-                "VoiceModeCore",
+                "WormtongueCore",
                 .product(name: "WhisperKit", package: "argmax-oss-swift"),
                 "KeyboardShortcuts",
             ],
@@ -41,11 +41,11 @@ import PackageDescription
 #endif
 
 let package = Package(
-    name: "VoiceMode",
+    name: "Wormtongue",
     platforms: [.macOS(.v14)],
     dependencies: platformDependencies,
     targets: [
-        .target(name: "VoiceModeCore"),
-        .testTarget(name: "VoiceModeCoreTests", dependencies: ["VoiceModeCore"]),
+        .target(name: "WormtongueCore"),
+        .testTarget(name: "WormtongueCoreTests", dependencies: ["WormtongueCore"]),
     ] + platformTargets
 )

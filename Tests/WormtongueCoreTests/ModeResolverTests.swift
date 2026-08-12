@@ -1,7 +1,7 @@
 import Foundation
 import Testing
 
-@testable import VoiceModeCore
+@testable import WormtongueCore
 
 private func makeConfig(
     dictionary: [String] = [],
