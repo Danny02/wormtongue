@@ -101,6 +101,10 @@ final class AppState: ObservableObject {
     private let contextProbe = ContextProbe()
     private let inserter = TextInserter()
     private let anthropic = AnthropicClient()
+    /// The pipeline's view of the rewrite provider: the interface, never the
+    /// concrete adapter. Lifecycle concerns (config, warm-up, health) stay on the
+    /// concrete type until provider selection is built.
+    private var provider: any LLMProvider { anthropic }
     private let overlay = OverlayController()
 
     /// Rebuilt only when the config changes — it precompiles regexes and builds
@@ -448,16 +452,12 @@ final class AppState: ObservableObject {
         }
 
         phase = .rewriting(contextSent: policy.contextAllowed)
-        let outcome: AnthropicClient.EditOutcome
+        let prompt = makePrompt(
+            mode: mode, transcript: transcript, context: context, policy: policy,
+            intent: intent)
+        let result: LLMResult
         do {
-            outcome = try await anthropic.edit(
-                model: mode.model ?? config.model,
-                system: resolver.systemPrompt(for: mode, intent: intent),
-                user: resolver.userMessage(
-                    transcript: transcript, context: context, policy: policy, intent: intent),
-                maxTokens: config.maxTokens,
-                intent: intent
-            )
+            result = try await LLMPipeline.run(provider: provider, prompt: prompt)
             watch.lap("llm")
         } catch {
             if Task.isCancelled || error is CancellationError { return }
@@ -485,7 +485,7 @@ final class AppState: ObservableObject {
         guard !Task.isCancelled else { return }
         phase = .inserting
 
-        let decision = outcome.decision
+        let decision = result.decision
         let action = apply(intent: intent, decision: decision)
         let method: InsertionMethod
         switch action {
@@ -510,10 +510,26 @@ final class AppState: ObservableObject {
                 contextSent: policy.contextAllowed, llmUsed: true,
                 intent: intent, action: action, method: method,
                 timings: watch.summary, context: context,
-                model: outcome.model, endpoint: activeEndpoint.base.absoluteString,
-                systemPrompt: outcome.systemPrompt, userMessage: outcome.userMessage,
-                thinking: outcome.thinking,
+                model: prompt.model, endpoint: activeEndpoint.base.absoluteString,
+                systemPrompt: prompt.system, userMessage: prompt.user,
+                thinking: result.thinking,
                 previousFieldValue: context.fieldValue, focusedElement: element))
+    }
+
+    /// Builds the seam's prompt from the resolved mode, the privacy policy, and
+    /// the transcript. Shared by the main pipeline and the history re-run, which
+    /// differ only in which context and transcript they feed it.
+    private func makePrompt(
+        mode: Mode, transcript: String, context: FieldContext, policy: Policy, intent: EditIntent
+    ) -> LLMPrompt {
+        LLMPrompt(
+            model: mode.model ?? config.model,
+            system: resolver.systemPrompt(for: mode, intent: intent),
+            user: resolver.userMessage(
+                transcript: transcript, context: context, policy: policy, intent: intent),
+            maxTokens: config.maxTokens,
+            intent: intent
+        )
     }
 
     /// Reconciles what the model asked for with what the field state permits.
@@ -654,29 +670,24 @@ final class AppState: ObservableObject {
                 // Re-runs always compose: the field has moved on since, so the
                 // original draft is no longer a safe thing to rewrite.
                 let policy = resolver.policy(for: dictation.context.bundleId)
-                let outcome = try await anthropic.edit(
-                    model: mode.model ?? config.model,
-                    system: resolver.systemPrompt(for: mode, intent: .compose),
-                    user: resolver.userMessage(
-                        transcript: dictation.raw, context: dictation.context, policy: policy,
-                        intent: .compose),
-                    maxTokens: config.maxTokens,
-                    intent: .compose
-                )
+                let prompt = makePrompt(
+                    mode: mode, transcript: dictation.raw, context: dictation.context,
+                    policy: policy, intent: .compose)
+                let result = try await LLMPipeline.run(provider: provider, prompt: prompt)
                 guard !Task.isCancelled else { return }
                 phase = .inserting
                 let method = inserter.insert(
-                    outcome.decision.text, into: dictation.focusedElement)
+                    result.decision.text, into: dictation.focusedElement)
                 finish(
                     Dictation(
                         modeName: "\(mode.name) (re-run)", raw: dictation.raw,
-                        result: outcome.decision.text,
+                        result: result.decision.text,
                         contextSent: dictation.contextSent, llmUsed: true,
                         intent: .compose, action: .insert, method: method,
                         timings: "re-run", context: dictation.context,
-                        model: outcome.model, endpoint: activeEndpoint.base.absoluteString,
-                        systemPrompt: outcome.systemPrompt, userMessage: outcome.userMessage,
-                        thinking: outcome.thinking,
+                        model: prompt.model, endpoint: activeEndpoint.base.absoluteString,
+                        systemPrompt: prompt.system, userMessage: prompt.user,
+                        thinking: result.thinking,
                         previousFieldValue: nil,
                         focusedElement: dictation.focusedElement))
             } catch {

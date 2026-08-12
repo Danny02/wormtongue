@@ -4,8 +4,9 @@ import WormtongueCore
 /// A single stateless completion per utterance over `POST /v1/messages`.
 ///
 /// Wire types and response parsing live in `WormtongueCore.AnthropicMessages` so
-/// they can be unit-tested; this is the transport.
-actor AnthropicClient {
+/// they can be unit-tested; this is the transport. Behind the `LLMProvider` seam
+/// it is the first adapter; the pipeline never names it directly.
+actor AnthropicClient: LLMProvider {
     private let session: URLSession
     /// Overridable so the app can be pointed at a gateway or a local mock.
     private var endpoint: APIEndpoint = .anthropic
@@ -28,6 +29,11 @@ actor AnthropicClient {
         configuration.httpMaximumConnectionsPerHost = 2
         self.session = URLSession(configuration: configuration)
     }
+
+    /// Structured outputs are supported: the Messages API's `output_config` ships
+    /// the JSON decision a `.revise` needs. Declared statically; never
+    /// feature-detected.
+    nonisolated var supportsStructuredOutput: Bool { true }
 
     /// Applied on every config load.
     func configure(endpoint: APIEndpoint, headers: [String: String]) {
@@ -83,29 +89,17 @@ actor AnthropicClient {
         }
     }
 
-    /// Rewrites the utterance and says what to do with the result.
+    /// Rewrites the utterance, leaving the edit decision to the seam.
     ///
-    /// `.compose` and `.replaceSelection` are deterministic, so they ask for plain
-    /// text. Only `.revise` — a draft with no selection — needs the model to choose
-    /// between adding and rewriting, and only that shape pays for structured output.
-    /// The decision, plus what History needs to explain how it was reached.
-    struct EditOutcome {
-        let decision: EditDecision
-        /// Reasoning, when the endpoint returned any. Nil against the plain API.
-        let thinking: String?
-        /// The exact text the model was given, kept verbatim for History.
-        let systemPrompt: String
-        let userMessage: String
-        let model: String
-    }
-
-    func edit(
-        model: String, system: String, user: String, maxTokens: Int, intent: EditIntent
-    ) async throws -> EditOutcome {
-        let structured = intent.needsDecision
+    /// `.compose` and `.replaceSelection` are deterministic, so the request asks
+    /// for plain text. Only `.revise` — a draft with no selection — needs the
+    /// model to choose between adding and rewriting, and only that shape pays for
+    /// structured output.
+    func complete(prompt: LLMPrompt) async throws -> LLMCompletion {
+        let structured = prompt.intent.needsDecision
         let body = try AnthropicMessages.Request(
-            model: model, system: system, user: user, maxTokens: maxTokens,
-            structured: structured
+            model: prompt.model, system: prompt.system, user: prompt.user,
+            maxTokens: prompt.maxTokens, structured: structured
         ).encoded()
 
         let data: Data
@@ -120,15 +114,7 @@ actor AnthropicClient {
         }
 
         let completion = try AnthropicMessages.completion(fromStatus: status, body: data)
-        let decision =
-            structured
-            ? AnthropicMessages.parse(decision: completion.text)
-            : EditDecision(
-                action: intent == .replaceSelection ? .replaceSelection : .insert,
-                text: completion.text)
-        return EditOutcome(
-            decision: decision, thinking: completion.thinking,
-            systemPrompt: system, userMessage: user, model: model)
+        return LLMCompletion(text: completion.text, thinking: completion.thinking)
     }
 
     private func send(_ body: Data) async throws -> (status: Int, data: Data) {
