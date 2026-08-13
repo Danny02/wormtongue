@@ -1,0 +1,542 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>sandcastle dashboard</title>
+<style>
+  :root{
+    --bg:#0e1116; --panel:#161b22; --panel2:#1c2129; --line:#2a313c;
+    --txt:#e6edf3; --mut:#8b949e; --accent:#58a6ff;
+    --green:#3fb950; --amber:#d29922; --red:#f85149; --violet:#a371f7; --teal:#39c5cf;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--txt);
+    font:14px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
+  header{display:flex;align-items:center;gap:12px;padding:12px 20px;
+    border-bottom:1px solid var(--line);position:sticky;top:0;background:var(--bg);z-index:10}
+  header .title{font-weight:600;letter-spacing:.3px}
+  .status{display:flex;align-items:center;gap:6px;margin-left:auto;font-size:12px;color:var(--mut)}
+  .dot{width:8px;height:8px;border-radius:50%;background:var(--green);animation:pulse 1.2s infinite}
+  .dot.done{animation:none;background:var(--mut)}
+  .dot.failed{animation:none;background:var(--red)}
+  @keyframes pulse{50%{opacity:.25}}
+  main{display:grid;grid-template-columns:minmax(300px,430px) 1fr;min-height:calc(100vh - 51px)}
+  .left{padding:18px 20px;border-right:1px solid var(--line);background:var(--panel);overflow-y:auto}
+  .ticket{border:1px solid var(--line);border-radius:6px;padding:12px 14px;background:var(--panel2);
+    display:flex;gap:12px;align-items:center;margin-bottom:16px}
+  .ticket .num{font-weight:700;color:var(--accent);font-size:18px}
+  .ticket a{color:var(--mut);text-decoration:none;font-size:12px}
+  .ticket a:hover{color:var(--accent);text-decoration:underline}
+  .issue-title{font-weight:500;line-height:1.3}
+  #graph{display:flex;flex-direction:column;gap:6px}
+  .node{display:flex;align-items:center;gap:10px;padding:7px 10px;border-radius:6px;
+    border:1px solid var(--line);background:var(--panel2);cursor:pointer;user-select:none}
+  .node:hover{border-color:#4d5566}
+  .node.selected{outline:2px solid var(--violet);outline-offset:-1px}
+  .node .ic{width:20px;height:20px;border-radius:5px;flex:none;display:grid;place-items:center;
+    font-size:11px;background:var(--line);color:var(--mut)}
+  .node .nm{font-weight:500}
+  .node .sub{color:var(--mut);font-size:11px;margin-top:1px}
+  .node .st2{margin-left:auto;font-size:11px;font-weight:600;text-align:right;flex:none;padding-left:8px}
+  .node .cnt{flex:none;font-size:10px;color:var(--mut);border:1px solid var(--line);border-radius:99px;
+    padding:0 6px;margin-left:6px}
+  .node[data-s=pending]{opacity:.55}
+  .node[data-s=running]{border-color:var(--accent);box-shadow:0 0 0 1px var(--accent) inset}
+  .node[data-s=running] .ic{background:var(--accent);color:#0b0f14;animation:pulse 1s infinite}
+  .node[data-s=running] .st2{color:var(--accent)}
+  .node[data-s=green]{border-color:#238636}
+  .node[data-s=green] .ic{background:var(--green);color:#0b0f14}
+  .node[data-s=green] .st2{color:var(--green)}
+  .node[data-s=failed]{border-color:#da3633}
+  .node[data-s=failed] .ic{background:var(--red);color:#0b0f14}
+  .node[data-s=failed] .st2{color:var(--red)}
+  .node[data-s=info]{border-color:#3d444d}
+  .node[data-s=info] .ic{background:var(--violet);color:#0b0f14}
+  .node[data-s=info] .st2{color:var(--violet)}
+  .node[data-s=skipped]{border-color:#3d444d;opacity:.6}
+  .loop{border:1px dashed #3d444d;border-radius:6px;padding:10px 8px 8px;position:relative;margin:8px 0 2px;background:var(--panel2)}
+  .loop .tag{position:absolute;top:-9px;left:10px;background:var(--panel);padding:0 6px;
+    font-size:10px;color:var(--mut);text-transform:uppercase;letter-spacing:.1em}
+  .loop .counter{font-weight:700;color:var(--accent);text-transform:none;letter-spacing:0}
+  .loop .counter.exhausted{color:var(--red)}
+  .loop .in{display:flex;flex-direction:column;gap:6px}
+  .right{display:grid;grid-template-rows:auto auto 1fr;min-height:calc(100vh - 51px)}
+  .cost{display:flex;gap:10px;padding:12px 20px;border-bottom:1px solid var(--line);background:var(--panel)}
+  .ccard{flex:1;border:1px solid var(--line);border-radius:6px;padding:8px 12px;background:var(--panel2);min-width:0}
+  .ccard .who{font-size:11px;color:var(--mut);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .ccard .amt{font-size:16px;font-weight:700;margin-top:2px}
+  .ccard .amt small{font-size:11px;color:var(--mut);font-weight:400}
+  .ccard .usd{color:var(--green)}
+  /* step tail card */
+  #stepCard{display:none;flex-direction:column;border-bottom:1px solid var(--line);
+    background:var(--panel);max-height:52vh;min-height:0}
+  #stepCard.open{display:flex}
+  .card-head{display:flex;align-items:center;gap:10px;padding:10px 20px 8px}
+  .card-head .ttl{font-weight:600}
+  .card-head .st-badge{font-size:11px;font-weight:600}
+  .card-head .modes{margin-left:auto;display:flex;gap:6px}
+  .card-head button{font-size:11px;padding:2px 8px;border-radius:4px;background:transparent;
+    border:1px solid var(--line);color:var(--mut);cursor:pointer}
+  .card-head button.on{color:var(--txt);border-color:#3d444d;background:#21262d}
+  .card-head #cardClose{font-size:14px;line-height:1;padding:2px 8px}
+  #cardBody{overflow-y:auto;padding:0 20px 12px;min-height:0}
+  .feed{display:flex;flex-direction:column;min-height:0}
+  .feed h3{margin:10px 20px 8px;font-size:11px;color:var(--mut);text-transform:uppercase;letter-spacing:.1em}
+  #stream{flex:1;overflow-y:auto;padding:0 20px 16px}
+  .ev{border-left:2px solid var(--line);padding:1px 0 1px 10px;margin-bottom:6px;font-size:12.5px;
+    font-family:"SF Mono",Menlo,Consolas,monospace}
+  .ev .k{font-size:9.5px;color:var(--mut);text-transform:uppercase;letter-spacing:.06em;display:block}
+  .ev.cont{padding-top:0;margin-top:-4px}
+  .ev[data-c=text]{border-color:var(--accent)} .ev[data-c=text] .k{color:var(--accent)}
+  .ev[data-c=thinking]{border-color:var(--violet)} .ev[data-c=thinking] .k{color:var(--violet)}
+  .ev[data-c=thinking] .b{color:var(--mut);font-style:italic}
+  .ev[data-c=tool]{border-color:var(--teal)} .ev[data-c=tool] .k{color:var(--teal)}
+  .ev[data-c=raw]{border-color:var(--amber)} .ev[data-c=raw] .k{color:var(--amber)}
+  .ev[data-c=sys]{border-color:#3d444d} .ev[data-c=sys] .k{color:var(--mut)}
+  .ev .b{white-space:pre-wrap;word-break:break-word}
+  .empty{color:var(--mut);font-size:12px;padding-top:8px}
+  /* completion summary popup */
+  #veil{position:fixed;inset:0;background:rgba(4,6,10,.66);display:none;align-items:center;
+    justify-content:center;z-index:50;padding:24px}
+  #veil.open{display:flex}
+  #summary{width:min(560px,100%);max-height:86vh;overflow-y:auto;background:var(--panel);
+    border:1px solid var(--line);border-radius:10px;box-shadow:0 24px 60px rgba(0,0,0,.5)}
+  #summary .top{padding:20px 22px 16px;border-bottom:1px solid var(--line);display:flex;gap:14px;align-items:flex-start}
+  #summary .badge{width:38px;height:38px;border-radius:9px;flex:none;display:grid;place-items:center;font-size:18px}
+  #summary.ok .badge{background:rgba(63,185,80,.16);color:var(--green);border:1px solid #238636}
+  #summary.bad .badge{background:rgba(248,81,73,.14);color:var(--red);border:1px solid #da3633}
+  #summary h2{margin:0;font-size:17px;letter-spacing:-.2px}
+  #summary .sub{color:var(--mut);font-size:12.5px;margin-top:3px}
+  #summary .human{display:inline-block;margin-top:8px;font-size:11px;font-weight:600;letter-spacing:.06em;
+    text-transform:uppercase;padding:2px 8px;border-radius:99px;border:1px solid var(--amber);color:var(--amber)}
+  #summary .human.auto{border-color:#238636;color:var(--green)}
+  #summary .link{display:inline-block;margin-top:10px;color:var(--accent);font-size:13px;text-decoration:none}
+  #summary .link:hover{text-decoration:underline}
+  #summary .grid{display:grid;grid-template-columns:1fr 1fr;gap:1px;background:var(--line);
+    border-bottom:1px solid var(--line)}
+  #summary .cell{background:var(--panel);padding:12px 22px}
+  #summary .cell .lbl{font-size:10.5px;color:var(--mut);text-transform:uppercase;letter-spacing:.08em}
+  #summary .cell .val{font-size:17px;font-weight:700;margin-top:2px}
+  #summary .cell .val small{font-size:11px;color:var(--mut);font-weight:400}
+  #summary .sect{padding:14px 22px}
+  #summary .sect h4{margin:0 0 8px;font-size:10.5px;color:var(--mut);text-transform:uppercase;letter-spacing:.08em}
+  #summary .row{display:flex;gap:10px;font-size:13px;padding:3px 0;border-bottom:1px solid var(--line-fine,transparent)}
+  #summary .row .rl{color:var(--mut);min-width:120px}
+  #summary .fail{font-size:12.5px;font-family:"SF Mono",Menlo,monospace;color:var(--red);
+    border-left:2px solid var(--red);padding:2px 0 2px 10px;margin-bottom:5px}
+  #summary .fail .att{color:var(--mut)}
+  #summary .foot{padding:12px 22px 18px;display:flex;gap:8px;justify-content:flex-end;border-top:1px solid var(--line)}
+  #summary button{font-size:12.5px;padding:7px 14px;border-radius:6px;background:#21262d;
+    border:1px solid #3d444d;color:var(--txt);cursor:pointer}
+  #summary button.primary{background:var(--accent);border-color:var(--accent);color:#0b0f14;font-weight:600}
+</style>
+</head>
+<body>
+<header>
+  <span class="title" id="title">sandcastle run</span>
+  <span class="status"><span class="dot" id="dot"></span><span id="statusTxt">connecting…</span></span>
+</header>
+
+<div id="veil">
+  <div id="summary">
+    <div class="top">
+      <div class="badge" id="sumIcon">✓</div>
+      <div style="min-width:0">
+        <h2 id="sumHead"></h2>
+        <div class="sub" id="sumSub"></div>
+        <div id="sumHuman"></div>
+        <a class="link" id="sumLink" target="_blank" style="display:none"></a>
+      </div>
+    </div>
+    <div class="grid" id="sumGrid"></div>
+    <div class="sect" id="sumFacts" style="display:none"></div>
+    <div class="sect" id="sumFails" style="display:none"></div>
+    <div class="foot">
+      <button id="sumClose">close</button>
+      <button class="primary" id="sumOpen" style="display:none">open link</button>
+    </div>
+  </div>
+</div>
+
+<main>
+  <section class="left">
+    <div class="ticket" id="ticketCard" style="display:none">
+      <div class="num" id="tnum"></div>
+      <div style="min-width:0">
+        <div class="issue-title" id="ttitle"></div>
+        <a id="turl" href="#" target="_blank">open on GitHub →</a>
+      </div>
+    </div>
+    <div id="graph"><div class="empty">waiting for the workflow to define its steps…</div></div>
+  </section>
+
+  <section class="right">
+    <div class="cost" id="cost"></div>
+
+    <div id="stepCard">
+      <div class="card-head">
+        <span class="ttl" id="cardTitle"></span>
+        <span class="st-badge" id="cardState"></span>
+        <span class="modes">
+          <button data-m="text" class="on">session</button>
+          <button data-m="thinking" class="on">thinking</button>
+          <button data-m="tool" class="on">bash</button>
+          <button data-m="raw" class="on">output</button>
+        </span>
+        <button id="cardClose" title="close">×</button>
+      </div>
+      <div id="cardBody"><div class="empty">no events for this step yet</div></div>
+    </div>
+
+    <div class="feed">
+      <h3>run log</h3>
+      <div id="stream"><div class="empty">no entries yet</div></div>
+    </div>
+  </section>
+</main>
+
+<script>
+const $ = (s) => document.querySelector(s);
+const esc = (s) => String(s ?? "").replace(/[&<>]/g, (c)=>({"&":"&amp;","<":"&lt;",">":"&gt;"}[c]));
+
+/* ---- ANSI → HTML: command tails keep their terminal colors ---- */
+const ANSI_FG = { 30:"#6e7681",31:"#f85149",32:"#3fb950",33:"#d29922",34:"#58a6ff",35:"#a371f7",36:"#39c5cf",37:"#e6edf3",
+                  90:"#8b949e",91:"#ff7b72",92:"#56d364",93:"#e3b341",94:"#79c0ff",95:"#d2a8ff",96:"#56d4dd",97:"#f0f6fc" };
+function ansiToHtml(s){
+  const parts = esc(s).split(/\u001b\[([0-9;]*)m/);
+  let out = parts[0] ?? "", styles = [];
+  for (let i = 1; i < parts.length; i += 2){
+    for (const c of (parts[i] || "0").split(";").map(Number)){
+      if (c === 0) styles = [];
+      else if (c === 1) styles.push("font-weight:700");
+      else if (c === 2) styles.push("opacity:.7");
+      else if (c === 3) styles.push("font-style:italic");
+      else if (c === 4) styles.push("text-decoration:underline");
+      else if (c === 39) styles = styles.filter((st)=>!st.startsWith("color:"));
+      else if (ANSI_FG[c]) styles = styles.filter((st)=>!st.startsWith("color:")).concat("color:" + ANSI_FG[c]);
+    }
+    const text = parts[i + 1] ?? "";
+    if (text) out += styles.length ? `<span style="${styles.join(";")}">${text}</span>` : text;
+  }
+  return out.replace(/\u001b\[[0-9;?]*[A-Za-z]/g, "");
+}
+const stripAnsi = (s) => String(s ?? "").replace(/\u001b\[[0-9;?]*[A-Za-z]/g, "");
+
+let graph = { order: [], nodes: {}, loops: {}, costs: {} };
+let runStatus = "running";
+let selected = null;
+const perStep = {};                 // stepId -> [{cls, kind, body}]
+const shown = { text:true, thinking:true, tool:true, raw:true };
+
+/* ---- classify an agent/exec event into a card lane ---- */
+function laneOf(ev){
+  if (ev.type === "text") return { cls:"text", kind:"session", body: ev.message };
+  if (ev.type === "thinking") return { cls:"thinking", kind:"thinking", body: ev.text };
+  if (ev.type === "toolCall") return { cls:"tool", kind:"bash", body: `${ev.name} ${ev.formattedArgs || ""}` };
+  if (ev.type === "raw") return { cls:"raw", kind:"output", body: ev.line };
+  return null;
+}
+function bufferEvent(ev){
+  const lane = laneOf(ev);
+  if (!lane) return;
+  const key = ev.step || "_run";
+  (perStep[key] ??= []).push(lane);
+  if (perStep[key].length > 400) perStep[key].shift();
+  bumpCount(key);
+  if (selected === key) appendCardLine(lane, true);
+}
+function bumpCount(key){
+  const el = document.querySelector(`.node[data-id="${key}"] .cnt`);
+  if (el) el.textContent = String((perStep[key] || []).length);
+}
+
+/* ---- run log (narrative only) ---- */
+function log(kindLabel, body){
+  const box = $("#stream");
+  const empty = box.querySelector(".empty"); if (empty) empty.remove();
+  const nearBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 60;
+  const d = document.createElement("div");
+  d.className = "ev"; d.dataset.c = "sys";
+  d.innerHTML = `<span class="k">${esc(kindLabel)}</span><div class="b">${esc(body)}</div>`;
+  box.appendChild(d);
+  while (box.children.length > 600) box.firstChild.remove();
+  if (nearBottom) box.scrollTop = box.scrollHeight;
+}
+
+/* ---- step tail card ---- */
+function openCard(id){
+  selected = id;
+  document.querySelectorAll(".node").forEach((n)=>n.classList.toggle("selected", n.dataset.id === id));
+  const n = graph.nodes[id] || {};
+  $("#cardTitle").textContent = n.label || id;
+  renderCardState(n);
+  $("#stepCard").classList.add("open");
+  renderCardBody();
+}
+function closeCard(){
+  selected = null;
+  lastCardLane = null;
+  document.querySelectorAll(".node.selected").forEach((n)=>n.classList.remove("selected"));
+  $("#stepCard").classList.remove("open");
+}
+function renderCardState(n){
+  const colors = { green:"var(--green)", failed:"var(--red)", running:"var(--accent)", skipped:"var(--mut)", pending:"var(--mut)", info:"var(--violet)" };
+  const el = $("#cardState");
+  el.textContent = n.stateLabel || n.state || "";
+  el.style.color = colors[n.state] || "var(--mut)";
+}
+function renderCardBody(){
+  const box = $("#cardBody"); box.innerHTML = "";
+  lastCardLane = null;
+  const events = (perStep[selected] || []).filter((l)=>shown[l.cls]);
+  if (!events.length){ box.innerHTML = '<div class="empty">no events for this step yet</div>'; return; }
+  for (const lane of events) appendCardLine(lane, false);
+  box.scrollTop = box.scrollHeight;
+}
+// Tracks the (cls, kind) of the last rendered line so an unbroken run of the
+// same lane doesn't repeat its header — reset whenever the card is rebuilt.
+let lastCardLane = null;
+function appendCardLine(lane, live){
+  if (!shown[lane.cls]) return;
+  const box = $("#cardBody");
+  const empty = box.querySelector(".empty"); if (empty) empty.remove();
+  const nearBottom = !live || box.scrollHeight - box.scrollTop - box.clientHeight < 60;
+  const sameAsLast = lastCardLane && lastCardLane.cls === lane.cls && lastCardLane.kind === lane.kind;
+  const d = document.createElement("div");
+  d.className = "ev" + (sameAsLast ? " cont" : ""); d.dataset.c = lane.cls;
+  d.innerHTML = (sameAsLast ? "" : `<span class="k">${esc(lane.kind)}</span>`) + `<div class="b">${ansiToHtml(lane.body)}</div>`;
+  box.appendChild(d);
+  lastCardLane = { cls: lane.cls, kind: lane.kind };
+  while (box.children.length > 400) box.firstChild.remove();
+  if (nearBottom) box.scrollTop = box.scrollHeight;
+}
+$("#cardClose").addEventListener("click", closeCard);
+document.querySelectorAll(".card-head .modes button").forEach((b)=>{
+  b.addEventListener("click", ()=>{
+    shown[b.dataset.m] = !shown[b.dataset.m];
+    b.classList.toggle("on", shown[b.dataset.m]);
+    renderCardBody();
+  });
+});
+
+/* ---- graph ---- */
+function renderGraph(){
+  const g = $("#graph"); g.innerHTML = "";
+  if (!graph.order.length){ g.innerHTML = '<div class="empty">waiting for the workflow to define its steps…</div>'; return; }
+  for (const entry of graph.order){
+    if (entry.kind === "loop"){
+      const loop = graph.loops[entry.id];
+      const wrap = document.createElement("div");
+      wrap.className = "loop"; wrap.dataset.loop = entry.id;
+      wrap.innerHTML = `<div class="tag">${esc(loop.label)} · <span class="counter" data-counter="${entry.id}">${counterText(loop)}</span></div>`;
+      const inner = document.createElement("div"); inner.className = "in";
+      for (const id of loop.unitIds) inner.appendChild(nodeEl(graph.nodes[id]));
+      wrap.appendChild(inner);
+      g.appendChild(wrap);
+    } else {
+      g.appendChild(nodeEl(graph.nodes[entry.id]));
+    }
+  }
+}
+function counterText(loop){
+  if (loop.exhausted) return "exhausted";
+  if (!loop.counter) return "waiting";
+  return `attempt ${loop.counter}${loop.max ? " / " + loop.max : ""}`;
+}
+function nodeEl(n){
+  const el = document.createElement("div");
+  el.className = "node" + (selected === n.id ? " selected" : "");
+  el.dataset.id = n.id; el.dataset.s = n.state || "pending";
+  const count = (perStep[n.id] || []).length;
+  el.innerHTML =
+    `<div class="ic">${esc(n.icon || "•")}</div>` +
+    `<div style="min-width:0"><div class="nm">${esc(n.label)}${n.optional ? ' <span style="color:var(--mut);font-size:10px">(if needed)</span>' : ""}</div>` +
+    (n.sub ? `<div class="sub">${esc(n.sub)}</div>` : "") +
+    `</div><span class="cnt">${count}</span><div class="st2">${esc(n.stateLabel || "")}</div>`;
+  el.addEventListener("click", ()=> selected === n.id ? closeCard() : openCard(n.id));
+  return el;
+}
+function applyNode(d){
+  const n = graph.nodes[d.id];
+  if (n){ n.state = d.state; n.stateLabel = d.stateLabel; n.detail = d.detail; }
+  const el = document.querySelector(`.node[data-id="${d.id}"]`);
+  if (el){ el.dataset.s = d.state; el.querySelector(".st2").textContent = d.stateLabel || ""; if (d.detail) el.title = stripAnsi(d.detail); }
+  if (selected === d.id && n) renderCardState(n);
+}
+
+/* ---- cost ---- */
+function renderCosts(){
+  const box = $("#cost"); box.innerHTML = "";
+  const entries = Object.entries(graph.costs);
+  if (!entries.length){
+    box.innerHTML = '<div class="ccard"><div class="who">spend</div><div class="amt"><small>tokens accrue as agent runs land</small></div></div>';
+    return;
+  }
+  for (const [model, c] of entries){
+    const card = document.createElement("div"); card.className = "ccard";
+    const usd = c.usd ? ` <span class="usd">$${(+c.usd).toFixed(4)}</span>` : "";
+    card.innerHTML = `<div class="who" title="${esc(model)}">${esc(model.split("/").pop())}</div>` +
+      `<div class="amt">${(+c.totalTokens).toLocaleString()}${usd} <small>tokens · ${c.runs} run${c.runs===1?"":"s"}</small></div>`;
+    box.appendChild(card);
+  }
+}
+
+/* ---- events from server ---- */
+function narrate(e){
+  if (e.kind === "node"){
+    const n = graph.nodes[e.data.id] || {};
+    log("step", `${n.label || e.data.id} → ${e.data.state}${e.data.stateLabel ? " (" + e.data.stateLabel + ")" : ""}`);
+  } else if (e.kind === "attempt"){
+    log("retry", e.data.exhausted ? `exhausted: ${e.data.exhausted}` : `attempt ${e.data.n}${e.data.max ? " / " + e.data.max : ""}`);
+  } else if (e.kind === "done"){
+    log("run", e.data.status === "done" ? `finished — ${e.data.headline || ""}` : `FAILED — ${e.data.headline || ""}`);
+  }
+}
+function handle(e){
+  switch(e.kind){
+    case "decl":
+      graph = { ...graph, ...e.data };
+      renderGraph(); renderCosts();
+      break;
+    case "node":
+      applyNode(e.data);
+      narrate(e);
+      break;
+    case "attempt": {
+      const loop = graph.loops[e.data.id];
+      if (loop){
+        loop.counter = e.data.n;
+        if (e.data.exhausted) loop.exhausted = e.data.exhausted;
+        for (const id of loop.unitIds){
+          if (!e.data.exhausted) applyNode({ id, state:"pending", stateLabel:"" });
+        }
+        const c = document.querySelector(`[data-counter="${e.data.id}"]`);
+        if (c){ c.textContent = counterText(loop); c.classList.toggle("exhausted", !!e.data.exhausted); }
+      }
+      narrate(e);
+      break;
+    }
+    case "event":
+      bufferEvent(e.data);
+      break;
+    case "cost":
+      graph.costs[e.data.model] = { runs: e.data.runs, totalTokens: e.data.totalTokens, usd: e.data.usd };
+      renderCosts();
+      break;
+    case "done":
+      runStatus = e.data.status;
+      setStatus();
+      narrate(e);
+      showSummary(e.data);
+      break;
+  }
+}
+/* ---- completion summary popup ---- */
+function fmtDuration(ms){
+  const s = Math.round(ms / 1000);
+  if (s < 60) return `${s}s`;
+  const m = Math.floor(s / 60), r = s % 60;
+  if (m < 60) return `${m}m ${r}s`;
+  return `${Math.floor(m / 60)}h ${m % 60}m`;
+}
+function showSummary(d){
+  const ok = d.status === "done";
+  const box = $("#summary");
+  box.className = ok ? "ok" : "bad";
+  $("#sumIcon").textContent = ok ? "✓" : "!";
+  $("#sumHead").textContent = d.headline || (ok ? "Run finished" : "Run failed");
+  $("#sumSub").textContent = d.issue ? `#${d.issue.number} ${d.issue.title}` : "";
+
+  const human = $("#sumHuman");
+  human.innerHTML = d.needsHuman
+    ? '<span class="human">needs a human</span>'
+    : (ok ? '<span class="human auto">no human needed</span>' : "");
+
+  const link = $("#sumLink"), openBtn = $("#sumOpen");
+  if (d.link){
+    link.style.display = "inline-block"; link.href = d.link; link.textContent = d.link + " →";
+    openBtn.style.display = "inline-block";
+    openBtn.onclick = () => window.open(d.link, "_blank");
+  } else { link.style.display = "none"; openBtn.style.display = "none"; }
+
+  const totalTokens = Object.values(d.costs || {}).reduce((a, c) => a + (+c.totalTokens || 0), 0);
+  const totalUsd = Object.values(d.costs || {}).reduce((a, c) => a + (+c.usd || 0), 0);
+  const attempts = (d.attempts || []).map((a)=>`${a.used}${a.max ? "/" + a.max : ""}`).join(", ") || "—";
+  const cells = [
+    ["wall clock", fmtDuration(d.durationMs || 0)],
+    ["attempts", attempts],
+    ["tokens", totalTokens.toLocaleString() + (totalUsd ? ` <small>$${totalUsd.toFixed(4)}</small>` : "")],
+    ["failed steps", String((d.failures || []).length)],
+  ];
+  $("#sumGrid").innerHTML = cells
+    .map(([l, v]) => `<div class="cell"><div class="lbl">${esc(l)}</div><div class="val">${v}</div></div>`)
+    .join("");
+
+  const facts = d.facts || [];
+  const perModel = Object.entries(d.costs || {}).map(([m, c]) =>
+    ({ label: m.split("/").pop(), value: `${(+c.totalTokens).toLocaleString()} tokens · ${c.runs} run${c.runs===1?"":"s"}${c.usd ? " · $" + (+c.usd).toFixed(4) : ""}` }));
+  const rows = [...facts, ...perModel];
+  const factsBox = $("#sumFacts");
+  if (rows.length){
+    factsBox.style.display = "block";
+    factsBox.innerHTML = "<h4>details</h4>" + rows
+      .map((f)=>`<div class="row"><span class="rl">${esc(f.label)}</span><span>${esc(f.value)}</span></div>`).join("");
+  } else factsBox.style.display = "none";
+
+  const failBox = $("#sumFails");
+  if ((d.failures || []).length){
+    failBox.style.display = "block";
+    failBox.innerHTML = "<h4>what went red</h4>" + d.failures
+      .map((f)=>`<div class="fail">${esc(f.label)}${f.attempt ? ` <span class="att">(attempt ${f.attempt})</span>` : ""}</div>`).join("");
+  } else failBox.style.display = "none";
+
+  $("#veil").classList.add("open");
+}
+function hideSummary(){ $("#veil").classList.remove("open"); }
+$("#sumClose").addEventListener("click", hideSummary);
+$("#veil").addEventListener("click", (e)=>{ if (e.target === $("#veil")) hideSummary(); });
+document.addEventListener("keydown", (e)=>{ if (e.key === "Escape") hideSummary(); });
+
+function setStatus(){
+  const dot = $("#dot"), st = $("#statusTxt");
+  if (runStatus === "done"){ dot.className = "dot done"; st.textContent = "run finished"; }
+  else if (runStatus === "failed"){ dot.className = "dot failed"; st.textContent = "run failed"; }
+  else { dot.className = "dot"; st.textContent = "live · run in progress"; }
+}
+
+/* ---- boot ---- */
+async function boot(){
+  try{
+    const s = await (await fetch("/state")).json();
+    $("#title").textContent = s.meta.title || "sandcastle run";
+    runStatus = s.meta.status;
+    if (s.meta.issue){
+      $("#ticketCard").style.display = "flex";
+      $("#tnum").textContent = "#" + s.meta.issue.number;
+      $("#ttitle").textContent = s.meta.issue.title;
+      if (s.meta.issue.url) $("#turl").href = s.meta.issue.url;
+    }
+    graph = { order: s.order, nodes: s.nodes, loops: s.loops, costs: s.costs };
+    for (const e of s.timeline || []){
+      if (e.kind === "event") bufferEvent(e.data);
+      else narrate(e);
+    }
+    renderGraph(); renderCosts(); setStatus();
+    // A page opened after the run ended still gets the summary.
+    if (s.meta.outcome) showSummary(s.meta.outcome);
+  }catch{
+    $("#statusTxt").textContent = "cannot reach workflow";
+    return;
+  }
+  const es = new EventSource("/events");
+  es.addEventListener("frontier", (ev)=> handle(JSON.parse(ev.data)));
+  es.onerror = () => {
+    if (runStatus !== "running"){ es.close(); $("#statusTxt").textContent += " · server stopped"; return; }
+    $("#statusTxt").textContent = "stream lost · retrying";
+  };
+}
+boot();
+</script>
+</body>
+</html>

@@ -1,0 +1,27 @@
+{
+  "theme": "dark",
+  "defaultProvider": "openrouter",
+  "defaultModel": "deepseek/deepseek-v4-flash-0731",
+  "defaultThinkingLevel": "high",
+  "packages": [
+    "npm:pi-claude-bridge",
+    "npm:pi-rtk-optimizer",
+    "npm:pi-web-access",
+    "npm:@tintinweb/pi-subagents",
+    "npm:@aliou/pi-guardrails"
+  ],
+  "enabledModels": [
+    "openrouter/deepseek/deepseek-v4-flash-0731",
+    "openrouter/deepseek/deepseek-v4-flash-0731:nitro",
+    "claude-bridge/claude-opus-5",
+    "claude-bridge/claude-fable-5",
+    "claude-bridge/claude-sonnet-5"
+  ],
+  "compaction": {
+    "enabled": true,
+    "reserveTokens": 848576,
+    "keepRecentTokens": 50000
+  },
+  "enableInstallTelemetry": false,
+  "quietStartup": true
+}

@@ -1,0 +1,16 @@
+{
+  "name": "wormtongue-agent-workflows",
+  "private": true,
+  "type": "module",
+  "description": "Sandcastle agent workflows for wormtongue. Not part of the Swift build.",
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "complete-ticket": "tsx --env-file-if-exists=.sandcastle/.env .sandcastle/complete-ticket/complete-ticket.ts"
+  },
+  "devDependencies": {
+    "@ai-hero/sandcastle": "^0.12.0",
+    "@types/node": "^26.2.0",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2"
+  }
+}

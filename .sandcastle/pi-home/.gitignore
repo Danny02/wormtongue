@@ -1,0 +1,11 @@
+# Seeded by setup.sh from ~/.pi/agent — not committed.
+# auth.json is a symlink to the real credentials; they never live here.
+auth.json
+models-store.json
+models.json
+npm/
+sessions/
+pi-debug.log
+
+# Guardrails migration backups
+extensions/guardrails.v*.json
