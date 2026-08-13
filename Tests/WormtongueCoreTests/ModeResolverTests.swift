@@ -182,6 +182,16 @@ struct PromptTests {
         #expect(prompt.contains("<editing>"))
     }
 
+    @Test("Every system prompt says to repair misheard words")
+    func transcriptionBlock() {
+        let resolver = ModeResolver(config: makeConfig())
+        for intent in [EditIntent.compose, .replaceSelection, .revise] {
+            let prompt = resolver.systemPrompt(for: Mode(name: "m", prompt: "base"), intent: intent)
+            #expect(prompt.contains("<transcription>"))
+            #expect(prompt.contains("leave the word exactly as transcribed"))
+        }
+    }
+
     @Test("Every system prompt says to keep the speaker's language")
     func languageBlock() {
         let resolver = ModeResolver(config: makeConfig())

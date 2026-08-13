@@ -145,10 +145,33 @@ public struct ModeResolver: Sendable {
     public func systemPrompt(for mode: Mode, intent: EditIntent = .compose) -> String {
         var parts = [mode.prompt]
         if let dictionaryBlock { parts.append(dictionaryBlock) }
+        parts.append(Self.transcriptionBlock)
         parts.append(Self.languageBlock)
         parts.append(Self.editingBlock(for: intent))
         return parts.joined(separator: "\n\n")
     }
+
+    /// Whisper mishears technical vocabulary and product names it has no reason to
+    /// know, and it never signals doubt — it emits a confident word that sounds
+    /// right and means nothing. The rewrite pass is the only stage that sees enough
+    /// context to repair that, so it is told to.
+    static let transcriptionBlock = """
+        <transcription>
+        The input is speech-to-text output, so it can contain misheard words: the
+        transcriber guessed at sounds it did not recognise and wrote something
+        confident but wrong. Repair those.
+
+        Fix a word when it makes no sense where it stands and a similar-sounding
+        word fits the sentence. This is most common with technical terms, product
+        and tool names, abbreviations, and foreign words inside another language —
+        "Clauzzi" for "Claude CLI", "Mekkoz" for "macOS".
+
+        Only repair what the surrounding words make obvious. If you cannot tell
+        what was meant, leave the word exactly as transcribed rather than guessing
+        — an odd word the speaker chose on purpose must survive. Never change the
+        meaning of a sentence that already makes sense.
+        </transcription>
+        """
 
     /// Mode prompts are written in English, which is enough on its own to pull a
     /// German transcript into English. Say so explicitly instead.
