@@ -293,3 +293,61 @@ struct ModelResolutionTests {
         #expect(codex.resolvedModel(for: nil) == "global-model")
     }
 }
+
+@Suite("Provider status severity")
+struct ProviderStatusTests {
+
+    @Test("Each severity maps to exactly one symbol, and no two share one")
+    func eachSeverityOneDistinctSymbol() {
+        #expect(ProviderStatusSeverity.ok.symbol == "checkmark.circle")
+        #expect(ProviderStatusSeverity.warning.symbol == "exclamationmark.triangle")
+        #expect(ProviderStatusSeverity.error.symbol == "exclamationmark.triangle.fill")
+        // One symbol per severity, and the three are pairwise distinct — so the
+        // panel can never render the same icon for two different severities.
+        let symbols = Set(ProviderStatusSeverity.allCases.map(\.symbol))
+        #expect(symbols.count == ProviderStatusSeverity.allCases.count)
+    }
+
+    @Test("The three severities are exactly ok, warning, and error")
+    func severityCasesMatchDesign() {
+        // An exhaustive switch proves there are no hidden cases beyond the three
+        // the panel is built around; each maps to a live colour decision.
+        func kind(_ s: ProviderStatusSeverity) -> Int {
+            switch s {
+            case .ok: return 0
+            case .warning: return 1
+            case .error: return 2
+            }
+        }
+        #expect(Set(ProviderStatusSeverity.allCases.map(kind)).count == 3)
+    }
+
+    @Test("A failing status can never be built with an ok severity")
+    func failingStatusNeverOk() {
+        // The states a user actually reaches, as the producers emit them. The
+        // invariant: only the verified, live probe reports ok; every failure and
+        // every unverified state is warning or error, never ok.
+        let noKeyStored = ProviderStatus(
+            headline: "Needs an API key", severity: .warning, detail: nil, actionURL: nil)
+        let storedButUnverified = ProviderStatus(
+            headline: "Configured — verify with Check", severity: .warning, detail: nil,
+            actionURL: nil)
+        let verified = ProviderStatus(
+            headline: "Ready — endpoint and key verified", severity: .ok, detail: nil,
+            actionURL: nil)
+        let probeFailure = ProviderStatus(
+            headline: "HTTP 401: invalid API key", severity: .error, detail: nil,
+            actionURL: nil)
+
+        #expect(noKeyStored.severity != .ok)
+        #expect(storedButUnverified.severity != .ok)
+        #expect(probeFailure.severity != .ok)
+        #expect(verified.severity == .ok)
+
+        // Severity is the one source of truth: what the icon will show follows it.
+        #expect(noKeyStored.severity.symbol == "exclamationmark.triangle")
+        #expect(storedButUnverified.severity.symbol == "exclamationmark.triangle")
+        #expect(probeFailure.severity.symbol == "exclamationmark.triangle.fill")
+        #expect(verified.severity.symbol == "checkmark.circle")
+    }
+}

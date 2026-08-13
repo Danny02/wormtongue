@@ -2,26 +2,16 @@ import Combine
 import SwiftUI
 import WormtongueCore
 
-/// What the Setup status/health panel shows for the active provider.
-///
-/// Computed by `ProviderDiagnostics` — which touches the Keychain and the disk to
-/// look at CLIs, never the network — and re-checked live for the keyed Anthropic
-/// provider via a real request.
-struct ProviderStatus: Equatable {
-    /// One-line headline, e.g. "Ready — key verified" or "claude not installed".
-    var headline: String
-    /// SF Symbol name for the status icon.
-    var symbol: String
-    /// Longer explanation / the reason behind the headline.
-    var detail: String?
-    /// Vendor sign-in docs for subscription providers.
-    var actionURL: URL?
-
-    init(headline: String, symbol: String, detail: String?, actionURL: URL?) {
-        self.headline = headline
-        self.symbol = symbol
-        self.detail = detail
-        self.actionURL = actionURL
+/// The only place severity meets SwiftUI colour, so the icon's colour and symbol
+/// always come from the same value. `.adapterAvailable` no longer colours the
+/// panel — it never said whether the provider actually works.
+extension ProviderStatusSeverity {
+    var color: Color {
+        switch self {
+        case .ok: return .green
+        case .warning: return .orange
+        case .error: return .red
+        }
     }
 }
 
@@ -52,7 +42,7 @@ enum ProviderDiagnostics {
         detail.append("Use Check to verify the key against the endpoint.")
         return ProviderStatus(
             headline: hasKey ? "Configured — verify with Check" : "Needs an API key",
-            symbol: hasKey ? "key.fill" : "exclamationmark.triangle",
+            severity: .warning,
             detail: detail.joined(separator: "\n"),
             actionURL: nil)
     }
@@ -78,8 +68,7 @@ enum ProviderDiagnostics {
         ]
         return ProviderStatus(
             headline: headline,
-            symbol: headline.hasPrefix("Configured")
-                ? "key.fill" : "exclamationmark.triangle",
+            severity: .warning,
             detail: detail.joined(separator: "\n"),
             actionURL: nil)
     }
@@ -118,7 +107,7 @@ enum ProviderDiagnostics {
         }
         return ProviderStatus(
             headline: headline,
-            symbol: installed && loggedIn ? "checkmark.circle" : "exclamationmark.triangle",
+            severity: installed && loggedIn ? .ok : .warning,
             detail: detail.joined(separator: "\n"),
             actionURL: provider.signInDocsURL)
     }
@@ -366,9 +355,8 @@ struct ProviderSection: View {
                 settings: state.config.activeProviderSettings)
         VStack(alignment: .leading, spacing: 8) {
             HStack(alignment: .firstTextBaseline, spacing: 8) {
-                Image(systemName: current.symbol)
-                    .foregroundStyle(
-                        state.config.provider.adapterAvailable ? .green : .orange)
+                Image(systemName: current.severity.symbol)
+                    .foregroundStyle(current.severity.color)
                 Text(current.headline).font(.caption).bold()
                 Spacer()
                 Button(checking ? "Checking…" : "Check") {

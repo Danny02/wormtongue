@@ -205,18 +205,18 @@ final class AppState: ObservableObject {
         case .anthropicKeyed:
             if let reason = await anthropic.healthCheck() {
                 result.headline = reason
-                result.symbol = "exclamationmark.triangle"
+                result.severity = .error
             } else {
                 result.headline = "Ready — endpoint and key verified"
-                result.symbol = "checkmark.circle"
+                result.severity = .ok
             }
         case .openAICompatible:
             if let reason = await openAI.healthCheck(model: config.resolvedModel(for: nil)) {
                 result.headline = reason
-                result.symbol = "exclamationmark.triangle"
+                result.severity = .error
             } else {
                 result.headline = "Ready — endpoint and key verified"
-                result.symbol = "checkmark.circle"
+                result.severity = .ok
             }
         case .claudeSubscription, .codexSubscription:
             break

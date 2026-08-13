@@ -220,6 +220,54 @@ public struct ProviderSettings: Codable, Sendable, Equatable {
     }
 }
 
+/// How broken a provider's readiness is. This is the single source of truth for
+/// the status icon: both the SF Symbol and its colour derive from it, so the
+/// panel's icon can never disagree with its headline.
+///
+/// A producer of a `ProviderStatus` states exactly one of these. There is no
+/// standalone "symbol" knob left to drift out of phase with the message.
+public enum ProviderStatusSeverity: Equatable, Sendable, CaseIterable {
+    case ok
+    case warning
+    case error
+
+    /// The one SF Symbol for this severity; the panel renders this, never a
+    /// hand-picked symbol.
+    public var symbol: String {
+        switch self {
+        case .ok: return "checkmark.circle"
+        case .warning: return "exclamationmark.triangle"
+        case .error: return "exclamationmark.triangle.fill"
+        }
+    }
+}
+
+/// What the Setup status/health panel shows for the active provider.
+///
+/// Computed by `ProviderDiagnostics` — which touches the Keychain and the disk to
+/// look at CLIs, never the network — and re-checked live for the keyed providers
+/// via a real request. `severity` drives both the icon symbol and its colour.
+public struct ProviderStatus: Equatable {
+    /// One-line headline, e.g. "Ready — key verified" or "claude not installed".
+    public var headline: String
+    /// One source of truth for the icon, symbol and colour alike.
+    public var severity: ProviderStatusSeverity
+    /// Longer explanation / the reason behind the headline.
+    public var detail: String?
+    /// Vendor sign-in docs for subscription providers.
+    public var actionURL: URL?
+
+    public init(
+        headline: String, severity: ProviderStatusSeverity, detail: String?,
+        actionURL: URL?
+    ) {
+        self.headline = headline
+        self.severity = severity
+        self.detail = detail
+        self.actionURL = actionURL
+    }
+}
+
 /// Errors the rewrite pass can hit purely from the provider selection — no
 /// transport involved — so the failure message is honest rather than a generic
 /// network error.
