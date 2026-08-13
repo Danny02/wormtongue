@@ -8,7 +8,7 @@ public enum OpenAICompatibleError: Error, LocalizedError, Equatable {
     case missingAPIKey
     case missingBaseURL
     case http(status: Int, type: String?, code: String?, message: String)
-    case emptyResponse
+    case emptyResponse(inspected: String)
     case cancelled
 
     public var errorDescription: String? {
@@ -21,8 +21,8 @@ public enum OpenAICompatibleError: Error, LocalizedError, Equatable {
         case let .http(status, type, code, message):
             return
                 "OpenAI-compatible API \(status)\(code.map { " (\($0))" } ?? "")\(type.map { " (\($0))" } ?? ""): \(message)"
-        case .emptyResponse:
-            return "The OpenAI-compatible API returned no text."
+        case let .emptyResponse(inspected: fields):
+            return "The OpenAI-compatible API returned no text (inspected \(fields))."
         case .cancelled:
             return "Cancelled."
         }
@@ -127,6 +127,49 @@ public enum OpenAICompatibleMessages {
             struct Message: Decodable {
                 let content: String?
                 let reasoningContent: String?
+                let toolCalls: [ToolCall]?
+                let functionCall: FunctionCall?
+
+                /// The fields a host can carry the answer in, in the order we
+                /// inspect them. Named in `emptyResponse` so a future report is
+                /// diagnosable from the message alone.
+                static let inspectedFields =
+                    "message.content, message.tool_calls[].function.arguments, message.function_call.arguments"
+
+                /// The answer a host actually sent, or nil if no field carries
+                /// usable text. Revise over OpenRouter answers with a tool call
+                /// (or legacy function call) whose `arguments` hold the JSON;
+                /// plain dictation answers in `content`.
+                var usableAnswer: String? {
+                    if let content, Self.isUsable(content) { return content }
+                    if let args = toolCalls?.first(where: {
+                        Self.isUsable($0.function?.arguments)
+                    })?.function?.arguments {
+                        return args
+                    }
+                    if let functionCall, Self.isUsable(functionCall.arguments) {
+                        return functionCall.arguments
+                    }
+                    return nil
+                }
+
+                static func isUsable(_ s: String?) -> Bool {
+                    guard let s else { return false }
+                    return !s.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                }
+
+                struct ToolCall: Decodable {
+                    struct Function: Decodable {
+                        let name: String?
+                        let arguments: String?
+                    }
+                    let function: Function?
+                }
+
+                struct FunctionCall: Decodable {
+                    let name: String?
+                    let arguments: String?
+                }
             }
             let message: Message?
             let finishReason: String?
@@ -158,16 +201,22 @@ public enum OpenAICompatibleMessages {
             throw OpenAICompatibleError.http(
                 status: status, type: nil, code: nil, message: "unparseable response body")
         }
-        guard let message = response.choices?.first?.message, let content = message.content
-        else { throw OpenAICompatibleError.emptyResponse }
-
-        let text = content.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !text.isEmpty else { throw OpenAICompatibleError.emptyResponse }
+        guard let message = response.choices?.first?.message else {
+            throw OpenAICompatibleError.emptyResponse(
+                inspected: Response.Choice.Message.inspectedFields)
+        }
+        guard
+            let raw = message.usableAnswer?.trimmingCharacters(in: .whitespacesAndNewlines),
+            !raw.isEmpty
+        else {
+            throw OpenAICompatibleError.emptyResponse(
+                inspected: Response.Choice.Message.inspectedFields)
+        }
 
         let rawThinking =
             message.reasoningContent?.trimmingCharacters(in: .whitespacesAndNewlines)
         let thinking = (rawThinking?.isEmpty ?? true) ? nil : rawThinking
-        return Completion(text: text, thinking: thinking)
+        return Completion(text: raw, thinking: thinking)
     }
 
     /// Hosts disagree on the error shape, so read it tolerantly: the OpenAI-style

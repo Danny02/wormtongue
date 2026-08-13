@@ -125,23 +125,62 @@ struct OpenAICompatibleResponseTests {
         #expect(try OpenAICompatibleMessages.text(fromStatus: 200, body: body(json)) == "hello")
     }
 
-    @Test("An empty or content-free response is an error, not an empty insert")
-    func emptyResponse() {
-        #expect(throws: OpenAICompatibleError.emptyResponse) {
-            try OpenAICompatibleMessages.text(fromStatus: 200, body: body(#"{ "choices": [] }"#))
-        }
-        #expect(throws: OpenAICompatibleError.emptyResponse) {
-            try OpenAICompatibleMessages.text(
-                fromStatus: 200,
-                body: body(#"{ "choices": [{ "message": { "content": "   " } }] }"#))
-        }
-        #expect(throws: OpenAICompatibleError.emptyResponse) {
-            try OpenAICompatibleMessages.text(
-                fromStatus: 200, body: body(#"{ "choices": [{ "message": { "content": null } }] }"#)
-            )
-        }
-        #expect(throws: OpenAICompatibleError.emptyResponse) {
-            try OpenAICompatibleMessages.text(fromStatus: 200, body: body("{}"))
+    @Test("An answer inside a tool call's function arguments is decoded")
+    func toolCallAnswer() throws {
+        let json = """
+            { "choices": [
+                { "message": {
+                    "role": "assistant",
+                    "content": null,
+                    "tool_calls": [{
+                        "id": "call_1",
+                        "type": "function",
+                        "function": {
+                            "name": "apply_edit",
+                            "arguments": "{\\\"action\\\":\\\"replace_all\\\",\\\"text\\\":\\\"New draft.\\\"}"
+                        }
+                    }] } } ] }
+            """
+        let text = try OpenAICompatibleMessages.text(fromStatus: 200, body: body(json))
+        #expect(text == #"{"action":"replace_all","text":"New draft."}"#)
+    }
+
+    @Test("An answer inside a legacy function call is decoded")
+    func functionCallAnswer() throws {
+        let json = """
+            { "choices": [
+                { "message": {
+                    "role": "assistant",
+                    "content": null,
+                    "function_call": {
+                        "name": "apply_edit",
+                        "arguments": "{\\\"action\\\":\\\"replace_all\\\",\\\"text\\\":\\\"New draft.\\\"}"
+                    } } } ] }
+            """
+        let text = try OpenAICompatibleMessages.text(fromStatus: 200, body: body(json))
+        #expect(text == #"{"action":"replace_all","text":"New draft."}"#)
+    }
+
+    @Test("An empty or content-free response is an error naming the inspected fields")
+    func emptyResponse() throws {
+        let bodies = [
+            #"{ "choices": [] }"#,
+            #"{ "choices": [{ "message": { "content": "   " } }] }"#,
+            #"{ "choices": [{ "message": { "content": null } }] }"#,
+            "{}",
+            #"{ "choices": [{ "message": { "content": null, "tool_calls": [], "function_call": null } }] }"#,
+        ]
+        for json in bodies {
+            let error = #expect(throws: OpenAICompatibleError.self) {
+                try OpenAICompatibleMessages.text(fromStatus: 200, body: body(json))
+            }
+            guard case let .emptyResponse(inspected: fields) = error else {
+                Issue.record("expected emptyResponse, got \(String(describing: error))\(json)")
+                continue
+            }
+            #expect(fields.contains("content"), "fields should name content: \(fields)")
+            #expect(fields.contains("tool_calls"), "fields should name tool_calls: \(fields)")
+            #expect(fields.contains("function_call"), "fields should name function_call: \(fields)")
         }
     }
 
