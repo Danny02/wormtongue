@@ -186,7 +186,8 @@ public enum AnthropicMessages {
         }
 
         let blocks = response.content ?? []
-        let text = blocks
+        let text =
+            blocks
             .filter { $0.type == "text" }
             .compactMap(\.text)
             .joined()
@@ -194,7 +195,8 @@ public enum AnthropicMessages {
 
         guard !text.isEmpty else { throw AnthropicError.emptyResponse }
 
-        let thinking = blocks
+        let thinking =
+            blocks
             .filter { $0.type == "thinking" }
             .compactMap(\.thinking)
             .joined(separator: "\n")

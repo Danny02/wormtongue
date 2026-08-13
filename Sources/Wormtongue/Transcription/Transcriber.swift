@@ -64,7 +64,8 @@ actor Transcriber {
         // If the compiler complains about overload ambiguity here, WhisperKit has
         // dropped the optional-returning form; use:
         //   let text = try await pipe.transcribe(audioArray: samples, decodeOptions: options).map(\.text).joined(separator: " ")
-        let text = try await pipe.transcribe(audioArray: samples, decodeOptions: options)?.text ?? ""
+        let text =
+            try await pipe.transcribe(audioArray: samples, decodeOptions: options)?.text ?? ""
         return text.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 }
