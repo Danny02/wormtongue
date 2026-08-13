@@ -98,17 +98,76 @@ struct SubscriptionCLITests {
         let emptyDir = FileManager.default.temporaryDirectory
             .appendingPathComponent("wormtongue-empty-bin-\(UUID().uuidString)")
         let env = ["PATH": emptyDir.path]
+        // A definitely-absent name: a real `claude` may live in a well-known
+        // directory on a dev machine, so a real name would be found by the
+        // extended lookup instead of reporting not-installed.
+        let absent = "wormtongue-absent-\(UUID().uuidString)"
+        let variant = SubscriptionCLIVariant(
+            executable: absent,
+            argBuilder: { _ in [] },
+            envSanitizer: { $0 },
+            outputParser: { _ in LLMCompletion(text: "x", thinking: nil) },
+            primeArguments: [])
         let prompt = LLMPrompt(
             model: "m", system: "s", user: "u", maxTokens: 16, intent: .compose)
         do {
             _ = try await SubscriptionCLI.complete(
-                variant: ClaudeSubscriptionCLI.variant, prompt: prompt, environment: env)
+                variant: variant, prompt: prompt, environment: env)
             Issue.record("expected notInstalled error")
         } catch let error as SubscriptionCLIError {
-            #expect(error == .notInstalled("claude"))
+            guard case let .notInstalled(exec, searched) = error else {
+                Issue.record("wrong error: \(error)")
+                return
+            }
+            #expect(exec == absent)
+            // The error names the directories that were searched, so a missing
+            // CLI is diagnosable instead of a flat "not on your PATH".
+            #expect(searched.contains(emptyDir.path))
+            #expect(error.errorDescription?.contains(emptyDir.path) == true)
         } catch {
             Issue.record("unexpected error: \(error)")
         }
+    }
+
+    @Test("A missing executable reports which directories were searched")
+    func notInstalledNamesSearchedDirs() async {
+        let emptyDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("wormtongue-empty-bin-2-\(UUID().uuidString)")
+        let env = ["PATH": emptyDir.path]
+        let absent = "wormtongue-absent-\(UUID().uuidString)"
+        let found = SubscriptionCLI.path(for: absent, in: env)
+        #expect(found == nil)
+        let searched = SubscriptionCLI.searchDirectories(in: env)
+        // The inherited PATH is searched first, and the well-known brew/npm/nvm
+        // locations are added so a Finder-launched app can find the CLIs.
+        #expect(searched.first == emptyDir.path)
+        #expect(searched.contains("/opt/homebrew/bin"))
+        #expect(searched.contains("/usr/local/bin"))
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        #expect(searched.contains("\(home)/.local/bin"))
+        #expect(searched.contains("\(home)/.nvm/current/bin"))
+    }
+
+    @Test("The lookup finds an executable that exists only in a well-known directory, off PATH")
+    func findsExecutableInWellKnownDirOffPath() throws {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("wormtongue-wellkindir-\(UUID().uuidString)")
+        let bin = dir.appendingPathComponent("bin")
+        try FileManager.default.createDirectory(at: bin, withIntermediateDirectories: true)
+        let fake = "wormtongue-fake-cli-\(UUID().uuidString)"
+        let exe = bin.appendingPathComponent(fake)
+        try Data("#!/bin/sh\nexit 0\n".utf8).write(to: exe)
+        try FileManager.default.setAttributes(
+            [.posixPermissions: 0o755], ofItemAtPath: exe.path)
+        let emptyPath = FileManager.default.temporaryDirectory
+            .appendingPathComponent("wormtongue-empty-offpath-\(UUID().uuidString)")
+        let env = ["PATH": emptyPath.path]
+        #expect(SubscriptionCLI.path(for: fake, in: env) == nil)
+        // The fake CLI is not on PATH but lives in an additional well-known
+        // location; the lookup must fall back to it.
+        #expect(
+            SubscriptionCLI.path(for: fake, in: env, additionalDirectories: [bin.path])
+                == exe.path)
     }
 
     @Test("A non-zero exit surfaces the stderr")

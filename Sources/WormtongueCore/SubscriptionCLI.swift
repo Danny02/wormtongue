@@ -40,7 +40,7 @@ public struct SubscriptionCLIVariant: Sendable {
 /// say clearly which CLI failed and why, so the status panel / dictation failure
 /// can be honest rather than a generic "network error".
 public enum SubscriptionCLIError: Error, LocalizedError, Equatable, Sendable {
-    case notInstalled(String)
+    case notInstalled(String, [String])
     case launchFailed(String, String)
     case nonZeroExit(String, Int32, String)
     case emptyOutput(String)
@@ -48,8 +48,9 @@ public enum SubscriptionCLIError: Error, LocalizedError, Equatable, Sendable {
 
     public var errorDescription: String? {
         switch self {
-        case let .notInstalled(exec):
-            return "`\(exec)` is not on your PATH — install and sign in per the vendor docs."
+        case let .notInstalled(exec, searched):
+            return
+                "`\(exec)` was not found in any searched directory. Searched: \(searched.joined(separator: ", "))."
         case let .launchFailed(exec, reason):
             return "Failed to launch `\(exec)`: \(reason)"
         case let .nonZeroExit(exec, code, stderr):
@@ -71,15 +72,52 @@ public enum SubscriptionCLIError: Error, LocalizedError, Equatable, Sendable {
 /// variant; everything else is shared so ticket #6's `codex` reuses it unchanged.
 public enum SubscriptionCLI {
 
-    /// Finds `executable` on the given PATH (default: the process environment).
+    /// The well-known install locations searched in addition to the inherited
+    /// `PATH`. A GUI app launched by Finder does not inherit the user's shell
+    /// `PATH` — it gets the system default, which omits Homebrew's
+    /// `/opt/homebrew/bin` on Apple Silicon and the npm/nvm global bins. So the
+    /// lookup falls back to these so long as an explicitly chosen binary is not
+    /// already on `PATH`.
+    public static let wellKnownBinDirectories: [String] = {
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        return [
+            "/opt/homebrew/bin",
+            "/usr/local/bin",
+            "\(home)/.local/bin",
+            "\(home)/.npm-global/bin",
+            "\(home)/.nvm/current/bin",
+        ]
+    }()
+
+    /// The directories searched for an executable: the inherited `PATH` first (so
+    /// an explicitly chosen binary wins), then the well-known install locations,
+    /// then any caller-supplied extra directories. Deduplicated in order.
+    public static func searchDirectories(
+        in environment: [String: String] = ProcessInfo.processInfo.environment,
+        additionalDirectories: [String] = []
+    ) -> [String] {
+        var dirs: [String] = []
+        if let value = environment["PATH"] {
+            dirs.append(contentsOf: value.split(separator: ":").map(String.init))
+        }
+        dirs.append(contentsOf: wellKnownBinDirectories)
+        dirs.append(contentsOf: additionalDirectories)
+        var seen = Set<String>()
+        return dirs.filter { seen.insert($0).inserted }
+    }
+
+    /// Finds `executable` in the searched directories (default: the process
+    /// environment and the well-known install locations). Returns its absolute
+    /// path or nil.
     public static func path(
         for executable: String,
-        in environment: [String: String] = ProcessInfo.processInfo.environment
+        in environment: [String: String] = ProcessInfo.processInfo.environment,
+        additionalDirectories: [String] = []
     ) -> String? {
-        guard let value = environment["PATH"] else { return nil }
-        for dir in value.split(separator: ":") {
-            let candidate = URL(fileURLWithPath: String(dir)).appendingPathComponent(executable)
-                .path
+        for dir in searchDirectories(
+            in: environment, additionalDirectories: additionalDirectories)
+        {
+            let candidate = URL(fileURLWithPath: dir).appendingPathComponent(executable).path
             if FileManager.default.isExecutableFile(atPath: candidate) { return candidate }
         }
         return nil
@@ -114,7 +152,8 @@ public enum SubscriptionCLI {
         environment: [String: String]
     ) async throws -> Data {
         guard let path = path(for: variant.executable, in: environment) else {
-            throw SubscriptionCLIError.notInstalled(variant.executable)
+            throw SubscriptionCLIError.notInstalled(
+                variant.executable, searchDirectories(in: environment))
         }
         let sanitized = variant.envSanitizer(environment)
         // Confine the child to an empty throwaway directory so the CLI has no

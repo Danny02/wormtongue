@@ -75,12 +75,15 @@ enum ProviderDiagnostics {
 
     private static func subscription(provider: ProviderKind) -> ProviderStatus {
         let command = provider == .claudeSubscription ? "claude" : "codex"
-        let installed = findExecutable(command) != nil
+        let searched = SubscriptionCLI.searchDirectories(
+            in: ProcessInfo.processInfo.environment)
+        let resolved = findExecutable(command)
+        let installed = resolved != nil
         let loggedIn = installed && detectLogin(command: command)
         var detail = [
             installed
-                ? "`\(command)` is installed on your PATH."
-                : "`\(command)` is not on your PATH."
+                ? "`\(command)` resolved to `\(resolved!)`."
+                : "`\(command)` was not found in any searched directory."
         ]
         if installed {
             detail.append(
@@ -88,6 +91,7 @@ enum ProviderDiagnostics {
                     ? "A sign-in credential was detected for the `\(command)` CLI."
                     : "No sign-in credential was detected for the `\(command)` CLI.")
         } else {
+            detail.append("Searched: \(searched.joined(separator: ", ")).")
             detail.append(
                 "Install and sign in per the vendor docs; Wormtongue never stores a subscription token."
             )
@@ -112,14 +116,12 @@ enum ProviderDiagnostics {
             actionURL: provider.signInDocsURL)
     }
 
-    /// Finds `command` on the PATH, returning its path or nil.
+    /// Finds `command` on the inherited PATH or in the well-known brew/npm/nvm
+    /// install locations (a Finder launch does not inherit the shell PATH),
+    /// returning its absolute path or nil. Delegates to the same lookup the
+    /// subscription runners use so the status panel agrees with runtime.
     static func findExecutable(_ command: String) -> String? {
-        guard let pathValue = ProcessInfo.processInfo.environment["PATH"] else { return nil }
-        for dir in pathValue.split(separator: ":") {
-            let candidate = URL(fileURLWithPath: String(dir)).appendingPathComponent(command).path
-            if FileManager.default.isExecutableFile(atPath: candidate) { return candidate }
-        }
-        return nil
+        SubscriptionCLI.path(for: command)
     }
 
     /// Best-effort sign-in detection for a subscription CLI, from the credential
