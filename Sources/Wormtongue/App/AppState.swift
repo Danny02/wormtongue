@@ -340,10 +340,13 @@ final class AppState: ObservableObject {
     }
 
     private func startRecording() {
-        // Never record into a password field.
+        // Never record while any app holds secure input — §7 of the brief. The
+        // block decision is `IsSecureEventInputEnabled()` alone; the lookup only
+        // names the culprit for the message.
         if Permissions.secureInputEnabled {
-            log.notice("dictation blocked: secure input is enabled")
-            fail("A password field has the keyboard — dictation is disabled.")
+            let blocker = Permissions.secureInputBlocker
+            log.notice("dictation blocked: \(blocker.message)")
+            fail(blocker.message)
             return
         }
         // Capture the target now, while the user's app is still frontmost.

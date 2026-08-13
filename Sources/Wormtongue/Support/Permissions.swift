@@ -2,7 +2,9 @@ import AVFoundation
 import AppKit
 import ApplicationServices
 import Carbon
+import IOKit
 import IOKit.hid
+import WormtongueCore
 
 enum Permission: String, CaseIterable, Identifiable {
     case accessibility
@@ -107,9 +109,50 @@ enum Permissions {
     /// which looks exactly like the checkbox lying to you.
     static var runningBundleURL: URL { Bundle.main.bundleURL }
 
-    /// True when a password field (or anything else using secure input) has the
-    /// keyboard. Never record, never paste — §7 of the brief.
+    /// True when any app has secure input enabled for this login session, which
+    /// is what happens while a password field has the keyboard. This is a
+    /// session-global flag, not "you are in a password field": browsers and
+    /// password managers routinely leave it on after the secure field loses focus.
+    /// Never record, never paste — §7 of the brief.
     static var secureInputEnabled: Bool {
         IsSecureEventInputEnabled()
+    }
+
+    /// The app holding secure input session-wide, resolved to the message to show.
+    ///
+    /// `IsSecureEventInputEnabled()` above is the authority on whether to block.
+    /// This lookup only explains *who* holds it, so a failed lookup must never
+    /// change the decision to block — it can only choose a more honest explanation.
+    static var secureInputBlocker: SecureInputBlocker {
+        guard let pid = secureInputPID else { return .unidentified }
+        guard let app = NSRunningApplication(processIdentifier: pid) else {
+            // The PID was published but the process is gone: macOS does not always
+            // clear the flag when an app exits without releasing it.
+            return .exitedProcess
+        }
+        if let name = app.localizedName, !name.isEmpty {
+            return .knownApp(named: name)
+        }
+        return .unidentified
+    }
+
+    /// The PID macOS publishes as holding secure input, read from the console-user
+    /// session dictionary (`kCGSSessionSecureInputPID` inside `IOConsoleUsers`).
+    private static var secureInputPID: pid_t? {
+        let service = IOServiceGetMatchingService(
+            kIOMainPortDefault, IOServiceMatching("IOResources"))
+        guard service != 0 else { return nil }
+        defer { IOObjectRelease(service) }
+        guard
+            let users = IORegistryEntryCreateCFProperty(
+                service, "IOConsoleUsers" as CFString, kCFAllocatorDefault, 0)?
+                .takeRetainedValue() as? [[String: Any]]
+        else { return nil }
+        for user in users {
+            if let pid = user["kCGSSessionSecureInputPID"] as? Int, pid > 0 {
+                return pid_t(pid)
+            }
+        }
+        return nil
     }
 }
