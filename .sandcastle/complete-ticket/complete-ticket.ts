@@ -523,16 +523,61 @@ async function reviewPass(
 }
 
 function pi(model: string): sandcastle.AgentProvider {
-  return sandcastle.pi(model, {
-    // Where sandcastle looks for the session it wants to resume. Omit it and
-    // it defaults to ~/.pi/agent/sessions, while pi — pointed at PI_HOME by
-    // the sandbox env — writes here. The two must name the same directory,
-    // which is why both derive from PI_HOME.
-    //
-    // PI_CODING_AGENT_DIR itself is set on the sandbox, not here: createSandbox
-    // discards an agent provider's env.
-    sessionStorage: { hostSessionsDir: path.join(PI_HOME, "sessions") },
-  });
+  return {
+    ...sandcastle.pi(model, {
+      // Where sandcastle looks for the session it wants to resume. Omit it and
+      // it defaults to ~/.pi/agent/sessions, while pi — pointed at PI_HOME by
+      // the sandbox env — writes here. The two must name the same directory,
+      // which is why both derive from PI_HOME.
+      //
+      // PI_CODING_AGENT_DIR itself is set on the sandbox, not here: createSandbox
+      // discards an agent provider's env.
+      sessionStorage: { hostSessionsDir: path.join(PI_HOME, "sessions") },
+    }),
+    // sandcastle only parses usage for the Claude Code provider; its pi
+    // provider surfaces none, so the dashboard's token counter reads 0 on
+    // every run. Pi does record usage in its session JSONL — a `type:message`
+    // event carries a cumulative { input, output, cacheRead, cacheWrite,
+    // totalTokens } — so parse the last one here and feed it back.
+    parseSessionUsage(content): sandcastle.IterationUsage | undefined {
+      let last: {
+        input: number; output: number; cacheRead: number; cacheWrite: number;
+      } | undefined;
+      for (const line of content.split("\n")) {
+        if (!line.startsWith("{")) continue;
+        let obj: {
+          type?: unknown;
+          message?: {
+            usage?: {
+              input?: number; output?: number;
+              cacheRead?: number; cacheWrite?: number; totalTokens?: number;
+            };
+          };
+        };
+        try {
+          obj = JSON.parse(line);
+        } catch {
+          continue;
+        }
+        if (obj.type !== "message" || !obj.message?.usage) continue;
+        const u = obj.message.usage;
+        if (
+          typeof u.input === "number" && typeof u.output === "number" &&
+          typeof u.cacheRead === "number" && typeof u.cacheWrite === "number" &&
+          typeof u.totalTokens === "number"
+        ) {
+          last = { input: u.input, output: u.output, cacheRead: u.cacheRead, cacheWrite: u.cacheWrite };
+        }
+      }
+      if (!last) return undefined;
+      return {
+        inputTokens: last.input,
+        outputTokens: last.output,
+        cacheReadInputTokens: last.cacheRead,
+        cacheCreationInputTokens: last.cacheWrite,
+      };
+    },
+  };
 }
 
 function promptArgs(): Record<string, string> {
