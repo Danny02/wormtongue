@@ -12,3 +12,17 @@ DerivedData/
 
 # pi agent local state
 .pi/
+
+# Node tooling for the sandcastle agent workflows
+node_modules/
+package-lock.json
+*.tsbuildinfo
+
+# Local configuration for the sandcastle workflows (never committed)
+.sandcastle/.env
+
+
+Schau, wie lange es da ist.
+Fast and in textism.
+
+I cloned the Linux perfectly on my macOS system.

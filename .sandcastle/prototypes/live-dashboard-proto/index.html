@@ -1,0 +1,315 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PROTOTYPE — live sandcastle dashboard</title>
+<style>
+  :root{
+    --bg:#0e1116; --panel:#161b22; --panel2:#1c2129; --line:#2a313c;
+    --txt:#e6edf3; --mut:#8b949e; --accent:#58a6ff;
+    --green:#3fb950; --amber:#d29922; --red:#f85149; --violet:#a371f7; --teal:#39c5cf;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--txt);
+    font:14px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
+  .mono{font-family:"SF Mono",Menlo,Consolas,monospace;font-size:12px}
+  header{display:flex;align-items:center;gap:12px;padding:12px 20px;
+    border-bottom:1px solid var(--line);position:sticky;top:0;background:var(--bg);z-index:5}
+  header .title{font-weight:600;letter-spacing:.3px}
+  header .proto{color:var(--amber);border:1px solid var(--amber);border-radius:4px;
+    padding:1px 6px;font-size:11px;text-transform:uppercase;letter-spacing:.12em}
+  .live{display:flex;align-items:center;gap:6px;margin-left:auto;font-size:12px;color:var(--mut)}
+  .dot{width:8px;height:8px;border-radius:50%;background:var(--green);
+    animation:pulse 1.2s ease-in-out infinite}
+  .dot.paused{animation:none;background:var(--mut)}
+  @keyframes pulse{50%{opacity:.25}}
+  main{display:grid;grid-template-columns:minmax(300px,420px) 1fr;gap:0;min-height:calc(100vh - 49px)}
+  /* left: issue + node graph */
+  .left{padding:18px 20px;border-right:1px solid var(--line);background:var(--panel)}
+  .ticket{border:1px solid var(--line);border-radius:8px;padding:12px 14px;background:var(--panel2);
+    display:flex;gap:12px;align-items:center;margin-bottom:18px}
+  .ticket .num{font-weight:700;color:var(--accent);font-size:18px}
+  .ticket .st{font-size:11px;padding:1px 7px;border-radius:99px;background:#1f6feb33;color:#79c0ff}
+  .ticket a{color:var(--mut);text-decoration:none;font-size:12px}
+  .ticket a:hover{color:var(--accent);text-decoration:underline}
+  .issue-title{font-weight:500;color:var(--txt);line-height:1.3}
+  #graph{display:flex;flex-direction:column;gap:6px}
+  .phase{color:var(--mut);font-size:11px;text-transform:uppercase;letter-spacing:.1em;margin:10px 0 4px}
+  .node{display:flex;align-items:center;gap:10px;padding:7px 10px;border-radius:6px;
+    border:1px solid var(--line);background:var(--panel2)}
+  .node .ic{width:20px;height:20px;border-radius:5px;flex:none;display:grid;place-items:center;
+    font-size:11px;background:var(--line);color:var(--mut)}
+  .node .nm{font-weight:500}
+  .node .sub{color:var(--mut);font-size:11px;margin-top:1px}
+  .node .st2{margin-left:auto;font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.06em;color:var(--mut)}
+  .node[data-s=pending]{opacity:.55}
+  .node[data-s=running]{border-color:var(--accent);box-shadow:0 0 0 1px var(--accent) inset}
+  .node[data-s=running] .ic{background:var(--accent);color:#0b0f14;animation:pulse 1s infinite}
+  .node[data-s=green]{border-color:#238636}
+  .node[data-s=green] .ic{background:var(--green);color:#0b0f14}
+  .node[data-s=green] .st2{color:var(--green)}
+  .node[data-s=failed]{border-color:#da3633}
+  .node[data-s=failed] .ic{background:var(--red);color:#0b0f14}
+  .node[data-s=failed] .st2{color:var(--red)}
+  .node[data-s=info]{border-color:#3d444d}
+  .node[data-s=info] .ic{background:var(--violet);color:#0b0f14}
+  .node[data-s=info] .st2{color:var(--violet)}
+  .attempt-wrap{border:1px dashed #3d444d;border-radius:8px;padding:8px;position:relative;margin-top:4px}
+  .attempt-wrap .tag{position:absolute;top:-8px;left:10px;background:var(--panel);padding:0 6px;
+    font-size:10px;color:var(--mut);text-transform:uppercase;letter-spacing:.1em}
+  /* right: live feed + session + cost */
+  .right{display:grid;grid-template-rows:auto 1fr auto;min-height:calc(100vh - 49px)}
+  .cost{display:flex;gap:10px;padding:12px 20px;border-bottom:1px solid var(--line);background:var(--panel)}
+  .ccard{flex:1;border:1px solid var(--line);border-radius:8px;padding:10px 12px;background:var(--panel2)}
+  .ccard .who{font-size:11px;color:var(--mut);text-transform:uppercase;letter-spacing:.08em}
+  .ccard .amt{font-size:20px;font-weight:700;margin-top:2px}
+  .ccard .amt small{font-size:12px;color:var(--mut);font-weight:400}
+  .ccard .amt.green{color:var(--green)} .ccard .amt.amber{color:var(--amber)}
+  .ccard .note{font-size:11px;color:var(--mut);margin-top:2px}
+  .feed{padding:12px 20px;overflow-y:auto;background:var(--bg)}
+  .feed h3{margin:4px 0 8px;font-size:11px;color:var(--mut);text-transform:uppercase;letter-spacing:.1em}
+  .ev{border-left:2px solid var(--line);padding:2px 0 2px 10px;margin-bottom:6px;font-size:12px}
+  .ev .k{font-size:10px;color:var(--mut);text-transform:uppercase;letter-spacing:.06em}
+  .ev.text .k{color:var(--accent)} .ev.tool .k{color:var(--teal)} .ev.raw .k{color:var(--amber)}
+  .ev.error .k{color:var(--red)} .ev .b{color:var(--txt);word-break:break-word}
+  .controls{padding:10px 20px;border-top:1px solid var(--line);background:var(--panel);display:flex;gap:8px;align-items:center}
+  button{background:#21262d;border:1px solid #3d444d;color:var(--txt);border-radius:6px;
+    padding:6px 12px;font-size:12px;cursor:pointer}
+  button:hover{background:#30363d}
+  button.primary{background:var(--accent);border-color:var(--accent);color:#0b0f14;font-weight:600}
+  button:disabled{opacity:.4;cursor:not-allowed}
+  .feed-spacer{flex:1}
+  .embed{background:var(--panel2);border:1px solid var(--line);border-radius:8px;padding:12px 14px;margin-top:14px}
+  .embed h3{margin:0 0 8px;font-size:11px;color:var(--mut);text-transform:uppercase;letter-spacing:.1em}
+  .embed pre{background:#0d1117;border:1px solid var(--line);border-radius:6px;padding:10px;overflow:auto;margin:0}
+  .embed .kw{color:#ff7b72}.embed .fn{color:#79c0ff}.embed .str{color:#a5d6ff}.embed .cm{color:var(--mut)}
+</style>
+</head>
+<body>
+<header>
+  <span class="proto">Prototype</span>
+  <span class="title">live sandcastle dashboard</span>
+  <span class="live"><span class="dot" id="dot"></span><span id="liveTxt">LIVE · simulating</span></span>
+</header>
+
+<main>
+  <!-- left: ticket + node graph -->
+  <section class="left">
+    <div class="ticket">
+      <div class="num" id="tnum">#12</div>
+      <div>
+        <div class="st" id="tst">open</div>
+        <div class="issue-title" id="ttitle">Dictionary entries cannot say what a term is misheard as</div>
+        <a id="turl" href="#" target="_blank">open on GitHub →</a>
+      </div>
+    </div>
+    <div id="graph"></div>
+    <div class="embed">
+      <h3>Proposed embedding (react?)</h3>
+<pre><span class="cm">// complete-ticket.ts, in the workflow author's hands</span>
+<span class="kw">import</span> { dashboard } <span class="kw">from</span> <span class="str">"sandcastle-dash"</span>;
+
+<span class="kw">const</span> dash = <span class="fn">dashboard</span>({ issue: <span class="str">"#12"</span> }); <span class="cm">// server on :4173</span>
+<span class="fn">dash.node</span>(<span class="str">"baseline"</span>).ok();
+<span class="kw">let</span> attempt = <span class="num">0</span>;
+<span class="kw">for</span>(;;){
+  attempt++;
+  <span class="kw">const</span> run = <span class="fn">dash.run</span>(<span class="str">"implement"</span>, { resume: attempt > <span class="num">1</span> });
+  run.session.<span class="fn">stream</span>(sub => <span class="fn">dash.session</span>(<span class="str">"#12"</span>, sub)); <span class="cm">// live JSONL</span>
+  <span class="kw">const</span> g = <span class="fn">check.sh</span>();
+  <span class="fn">dash.node</span>(<span class="str">"check.sh"</span>).<span class="fn">set</span>(g.ok ? <span class="str">"green"</span> : <span class="str">"failed"</span>);
+  <span class="kw">if</span>(!g.ok) <span class="kw">continue</span>;
+  <span class="fn">dash.done()</span>; <span class="cm">// keep page open, teardown server</span>
+}</pre>
+    </div>
+  </section>
+
+  <!-- right: cost + live feed -->
+  <section class="right">
+    <div class="cost">
+      <div class="ccard"><div class="who">Implementer</div>
+        <div class="amt green" id="cImp">$0.00<small> / attempt</small></div>
+        <div class="note" id="cImpNote">deepseek-v4-flash · cheap</div></div>
+      <div class="ccard"><div class="who">Reviewer</div>
+        <div class="amt amber" id="cRev">$0.00<small> / pass</small></div>
+        <div class="note">claude-opus · expensive (illustrative)</div></div>
+      <div class="ccard"><div class="who">Run total</div>
+        <div class="amt" id="cTot">$0.00</div>
+        <div class="note" id="cTotNote"></div></div>
+    </div>
+    <div class="feed" id="feed">
+      <h3>Live agent stream · <span id="feedsrc">named runs → websocket</span></h3>
+      <div id="feedBox"></div>
+    </div>
+    <div class="controls">
+      <button id="play" class="primary">▶ play run</button>
+      <button id="pause">⏸ pause</button>
+      <button id="reset">↺ reset</button>
+      <span class="feed-spacer"></span>
+      <span class="mono" id="seedTxt" style="color:var(--mut)"></span>
+    </div>
+  </section>
+</main>
+
+<script src="data.js"></script>
+<script>
+const D = window.PROTO_DATA;
+const $ = (s) => document.querySelector(s);
+
+/* ---- nodes / workflow shape ---- */
+// Node id -> label. `wrap` marks a retry sub-group.
+const BOOK = [
+  { phase:"start", nodes:[{id:"baseline", label:"baseline · gate green?", icon:"✓"}] },
+  {
+    phase:"attempt 1", wrap:{label:"attempt 1"},
+    nodes:[
+      {id:"a1.implement", label:"implement agent", icon:"✦", sub:"deepseek · implement-12"},
+      {id:"a1.rebase", label:"rebase onto origin/main", icon:"⇄"},
+      {id:"a1.check", label:"check.sh", icon:"✓"},
+      {id:"a1.review", label:"review agent", icon:"★", sub:"opus"},
+      {id:"a1.verdict", label:"verdict", icon:"◆"},
+    ],
+  },
+  {
+    phase:"attempt 2 · retry", wrap:{label:"attempt 2"},
+    nodes:[
+      {id:"a2.implement", label:"implement (resume)", icon:"↻", sub:"deepseek · resumes session"},
+      {id:"a2.check", label:"check.sh", icon:"✓"},
+      {id:"a2.review", label:"review agent", icon:"★", sub:"opus"},
+      {id:"a2.verdict", label:"verdict", icon:"◆"},
+    ],
+  },
+  {
+    phase:"route", nodes:[
+      {id:"route", label:"squash-merge → main", icon:"⤳", sub:"or open PR", isPr:true},
+    ],
+  },
+];
+
+function buildGraph(){
+  const g = $("#graph");
+  for(const group of BOOK){
+    if(group.phase) { const p=document.createElement("div"); p.className="phase"; p.textContent=group.phase; g.appendChild(p); }
+    const nodes = group.nodes;
+    if(group.wrap){
+      const w=document.createElement("div"); w.className="attempt-wrap";
+      const tag=document.createElement("div"); tag.className="tag"; tag.textContent=group.wrap.label; w.appendChild(tag);
+      for(const n of nodes) w.appendChild(makeNode(n));
+      g.appendChild(w);
+    } else {
+      for(const n of nodes) g.appendChild(makeNode(n));
+    }
+  }
+}
+function makeNode(n){
+  const d=document.createElement("div"); d.className="node"; d.dataset.id=n.id; d.dataset.s="pending";
+  d.innerHTML =
+    `<div class="ic">${n.icon}</div>`+
+    `<div><div class="nm">${n.label}</div>${n.sub?`<div class="sub">${n.sub}</div>`:""}</div>`+
+    `<div class="st2"></div>`;
+  if(n.isPr) d.addEventListener("click",()=>selectRun(null)); // placeholder
+  else d.addEventListener("click",()=>selectRun(n.id));
+  return d;
+}
+function node(id){ return document.querySelector(`.node[data-id="${id}"]`); }
+function setState(id, st, label=""){
+  const el=node(id); if(!el) return;
+  el.dataset.s=st;
+  if(label) el.querySelector(".st2").textContent=label;
+}
+function resetAll(){ document.querySelectorAll(".node").forEach(n=>{n.dataset.s="pending"; n.querySelector(".st2").textContent="";}); }
+
+/* ---- live feed (simulated onAgentStreamEvent over ws) ---- */
+const feedEvents=[];
+function ev(kind,msg,cls){ return {kind,msg,cls}; }
+function feed(kind,msg,error){
+  const box=$("#feedBox");
+  const d=document.createElement("div"); d.className="ev "+(error?"error":kind);
+  d.innerHTML=`<div class="k">${kind}${error?" · error":""}</div><div class="b">${msg}</div>`;
+  box.appendChild(d); box.scrollTop=box.scrollHeight;
+}
+window._feed=feed;
+
+/* ---- session summary panel (mock: click a run) ---- */
+function selectRun(id){
+  // inline summary of the real extracted implement session
+  window._feed && feed("raw","(clicked a node → here a session pane/transcript would open)");
+}
+
+/* ---- the "run" simulation ---- */
+let timer=null, step=0, pending=true;
+const STEPLOG={total:0};
+function applyCost(stepIndex){
+  const imp=0.0455, rev=0.28;
+  const attempts={
+    3:{imp,rev},          // after a2.verdict shows reviewer cost
+  };
+  // sum
+  let cImp=0,cRev=0;
+  cImp += imp;            // one implementer session consumed by a1
+  if(stepIndex>=7) cRev += rev;              // a1 review rejected -> opus paid
+  if(stepIndex>=12) cImp += imp;             // a2 implement (resume)
+  if(stepIndex>=14) cRev += rev;             // a2 review approved
+  const tot=cImp+cRev;
+  $("#cImp").innerHTML=`$${cImp.toFixed(4)}<small> / attempt</small>`;
+  $("#cRev").innerHTML=`$${cRev.toFixed(4)}<small> / pass</small>`;
+  $("#cTot").textContent=`$${tot.toFixed(4)}`;
+  $("#cTotNote").textContent=`${(tot/1).toFixed(2)}¢ run`;
+}
+const SCRIPT=[
+  // [id, state][0], [label][1], [feed msg][2]
+  ["baseline","green","green",null,"baseline: gate green on origin/main"],
+  ["a1.implement","info","running","implement-#12 · deepseek","I'll start by reading the ticket and understanding the repository — "+(D.running.text[0]||"")],
+  ["a1.rebase","green","green","rebase clean","rebase onto origin/main: fast-forward, no conflicts"],
+  ["a1.check","failed","failed","check.sh FAILED","check.sh: 4 swift-format violations in Sources Tests (failed)"],
+  ["a1.verdict","info","info","retry","verdict: cannot land — gate red, dispatch attempt 2"],
+  ["a2.implement","info","running","implement-#12 · resume","retrying — "+(D.running.thinking[0]||"resuming from checkpoint")],
+  ["a2.check","green","green","check.sh green","check.sh: all green (Core builds, tests pass, lint clean)"],
+  ["a2.review","info","running","review-#12 · opus","reviewer: "+(D.running.text[2]||"quality gate running…")],
+  ["a2.verdict","green","green","approved","review: approved (0 objections)"],
+  ["route","green","green","squash-merge","routing: Core+Tests only → squash-merge to main (Fixes #12)"],
+];
+function runStep(i){
+  if(i>=SCRIPT.length){ finished(); return; }
+  const [id,st,feedst,label,msg]=SCRIPT[i];
+  // clear failed state before showing its msg
+  feed(feedst==="failed"?"error":feedst,msg,feedst==="failed");
+  setState(id,st,label||null);
+  applyCost(i);
+  // reset a1 failed badge style when attempt2 runs
+  if(id==="a2.implement"){ setState("a1.check","failed","check.sh FAILED"); }
+}
+function start(){
+  if(!pending){ resetAll(); feed("raw","--- run restart ---"); }
+  pending=false; step=0;
+  $("#dot").classList.remove("paused"); $("#liveTxt").textContent="LIVE · implementing #12";
+  $("#play").disabled=true; $("#play").textContent="running…";
+  applyCost(0);
+  tick();
+}
+function tick(){
+  runStep(step); step++;
+  if(step<=SCRIPT.length) timer=setTimeout(tick, step===1?400:650);
+}
+function finished(){
+  $("#play").disabled=false; $("#play").textContent="▶ rerun";
+  $("#dot").classList.add("paused"); $("#liveTxt").textContent="run finished · page stays open";
+  feed("raw","-- dashboard.done(): server teardown, page left for inspection --");
+}
+$("#play").addEventListener("click",()=>{ if(!pending) setTimeout(start,50); else start(); });
+$("#reset").addEventListener("click",()=>{ clearTimeout(timer); pending=true; resetAll(); feed("raw","--- reset ---"); step=0; $("#cImp").innerHTML="$0.0000<small> / attempt</small>"; $("#cRev").innerHTML="$0.0000<small> / pass</small>"; $("#cTot").textContent="$0.0000"; });
+$("#pause").addEventListener("click",()=>{ clearTimeout(timer); $("#dot").classList.add("paused"); });
+
+/* seed data */
+$("#tnum").textContent="#"+D.ticket.number;
+$("#ttitle").textContent=D.ticket.title;
+$("#turl").href=D.ticket.url;
+$("#cImpNote").textContent=D.usage?`${D.usage.cost} · real implement session`:"";
+
+buildGraph();
+feed("raw","ws connected → onAgentStreamEvent bridge ready");
+feed("tool","iteration 0 · setup sandbox done (0.1s)");
+</script>
+</body>
+</html>

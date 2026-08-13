@@ -1,0 +1,68 @@
+{
+  "$schema": "https://unpkg.com/@aliou/pi-guardrails@0.17.0/schema.json",
+  "enabled": true,
+  "applyBuiltinDefaults": true,
+  "onboarding": {
+    "completed": true
+  },
+  "features": {
+    "policies": true,
+    "permissionGate": true,
+    "pathAccess": false
+  },
+  "permissionGate": {
+    "requireConfirmation": false,
+    "autoDenyPatterns": [
+      {
+        "pattern": "git push",
+        "description": "The workflow owns pushing. Commit to your branch and stop.",
+        "regex": true
+      },
+      {
+        "pattern": "git merge",
+        "description": "The workflow owns merging. Commit to your branch and stop.",
+        "regex": true
+      },
+      {
+        "pattern": "git rebase --abort",
+        "description": "Do not abandon the rebase. Resolve it, or stop and say you cannot.",
+        "regex": true
+      },
+      {
+        "pattern": "git worktree",
+        "description": "The workflow owns worktrees.",
+        "regex": true
+      },
+      {
+        "pattern": "gh pr",
+        "description": "The workflow opens and merges pull requests.",
+        "regex": true
+      },
+      {
+        "pattern": "gh issue close",
+        "description": "The workflow closes issues, via the merge commit.",
+        "regex": true
+      },
+      {
+        "pattern": "gh issue edit",
+        "description": "The workflow owns issue labels and state.",
+        "regex": true
+      }
+    ]
+  },
+  "policies": [
+    {
+      "id": "sandcastle-harness",
+      "name": "Agent harness",
+      "description": "The worker must not rewrite the workflow that dispatched it.",
+      "patterns": [
+        {
+          "pattern": ".sandcastle/**"
+        }
+      ],
+      "protection": "readOnly",
+      "blockMessage": "{file} belongs to the workflow that dispatched you, not to this ticket."
+    }
+  ],
+  "version": "0.16.2"
+}
