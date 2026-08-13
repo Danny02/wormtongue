@@ -34,6 +34,8 @@ struct SubscriptionCLITests {
             "  echo \"###ENV###\"",
             "  if [ -n \"${ANTHROPIC_API_KEY:-}\" ]; then echo \"HAS_KEY=yes\"; else echo \"HAS_KEY=no\"; fi",
             "  if [ -n \"${ANTHROPIC_AUTH_TOKEN:-}\" ]; then echo \"HAS_TOKEN=yes\"; else echo \"HAS_TOKEN=no\"; fi",
+            "  echo \"###PWD###\"",
+            "  pwd",
             "} > \"$FAKE_CAPTURE_FILE\"",
             "cat <<'FAKE_EOF'",
             stdout,
@@ -45,12 +47,14 @@ struct SubscriptionCLITests {
             [.posixPermissions: 0o755], ofItemAtPath: scriptURL.path)
 
         var env: [String: String] = [:]
-        env["PATH"] = bin.path + ":" + (ProcessInfo.processInfo.environment["PATH"] ?? "/usr/bin:/bin")
+        env["PATH"] =
+            bin.path + ":" + (ProcessInfo.processInfo.environment["PATH"] ?? "/usr/bin:/bin")
         env["FAKE_CAPTURE_FILE"] = capture.path
         return (env, capture.path)
     }
 
-    @Test("A fake claude verifies the spawned args, parses the output, and strips ANTHROPIC_API_KEY")
+    @Test(
+        "A fake claude verifies the spawned args, parses the output, and strips ANTHROPIC_API_KEY")
     func fakeClaudeSpawnsAndParses() async throws {
         let jsonResult = #"{"type":"result","result":"The finished rewrite.","session_id":"s1"}"#
         let (env, capturePath) = try makeFakeClaude(stdout: jsonResult)
@@ -73,7 +77,7 @@ struct SubscriptionCLITests {
         #expect(captured.contains("HAS_KEY=no"))
         #expect(captured.contains("HAS_TOKEN=no"))
         // The headless one-shot args: print mode, prompt, model, system, one shot,
-        // JSON output, bypassed permission prompts.
+        // JSON output, and the toolset disabled so no tool can run.
         #expect(captured.contains("ARG[1]=-p"))
         #expect(captured.contains("This  is  messy wording."))
         #expect(captured.contains("--model"))
@@ -83,8 +87,9 @@ struct SubscriptionCLITests {
         #expect(captured.contains("--max-turns"))
         #expect(captured.contains("--output-format"))
         #expect(captured.contains("json"))
-        #expect(captured.contains("--permission-mode"))
-        #expect(captured.contains("bypassPermissions"))
+        #expect(captured.contains("--tools"))
+        #expect(!captured.contains("bypassPermissions"))
+        #expect(!captured.contains("--permission-mode"))
         #expect(!captured.contains("sk-ant-secret"))
     }
 
@@ -139,11 +144,39 @@ struct SubscriptionCLITests {
 
     @Test("Prime spawns the cheap auth-status args and tolerates failure")
     func primeSpawnsAuthStatus() async throws {
-        let (env, capturePath) = try makeFakeClaude(stdout: #"{"type":"result","result":"not signed in"}"#)
+        let (env, capturePath) = try makeFakeClaude(
+            stdout: #"{"type":"result","result":"not signed in"}"#)
         await SubscriptionCLI.prime(variant: ClaudeSubscriptionCLI.variant, environment: env)
         let captured = try String(contentsOfFile: capturePath, encoding: .utf8)
         #expect(captured.contains("auth"))
         #expect(captured.contains("status"))
+    }
+
+    @Test("The child claude is confined to a throwaway temporary working directory")
+    func childWorkDirConfined() async throws {
+        let (env, capturePath) = try makeFakeClaude(stdout: #"{"type":"result","result":"ok"}"#)
+        let prompt = LLMPrompt(
+            model: "m", system: "s", user: "u", maxTokens: 16, intent: .compose)
+        _ = try await SubscriptionCLI.complete(
+            variant: ClaudeSubscriptionCLI.variant, prompt: prompt, environment: env)
+        let captured = try String(contentsOfFile: capturePath, encoding: .utf8)
+        // The PWD line is the first capture line that does not start with ###.
+        let childCwd = captured.split(separator: "\n")
+            .filter { !$0.hasPrefix("###") && $0.hasPrefix("/") }
+            .first.map(String.init)
+        #expect(childCwd != nil)
+        // `pwd` reports the symlink-resolved path (/private/var/…), so normalise
+        // both sides the same way before comparing against the temp root.
+        func normalised(_ p: String) -> String {
+            p.hasPrefix("/private/var/") ? String(p.dropFirst("/private".count)) : p
+        }
+        let tempRoot = FileManager.default.temporaryDirectory.path
+        let hostCwd = FileManager.default.currentDirectoryPath
+        #expect(normalised(childCwd!).hasPrefix(tempRoot))
+        #expect(childCwd!.contains("wormtongue-subscription-"))
+        #expect(normalised(childCwd!) != normalised(hostCwd))
+        // And the throwaway directory is removed once the process exits.
+        #expect(FileManager.default.fileExists(atPath: childCwd!) == false)
     }
 
     @Test("Claude JSON parsing skips thinking but keeps the text blocks")
@@ -155,8 +188,8 @@ struct SubscriptionCLITests {
             {"type":"assistant","message":{"content":[{"type":"thinking","thinking":"I should just rewrite this."},{"type":"text","text":"Cleaned up."}]}}
             """
             .trimmingCharacters(in: .whitespacesAndNewlines)
-            + "\n"
-            + #"{"type":"result","result":"Cleaned up.","session_id":"s"}"#).utf8)
+                + "\n"
+                + #"{"type":"result","result":"Cleaned up.","session_id":"s"}"#).utf8)
         let completion = try SubscriptionCLI.parseClaudeJSON(data)
         #expect(completion.text == "Cleaned up.")
         #expect(completion.thinking == "I should just rewrite this.")
@@ -205,7 +238,8 @@ struct SubscriptionCLITests {
             [.posixPermissions: 0o755], ofItemAtPath: scriptURL.path)
 
         var env: [String: String] = [:]
-        env["PATH"] = bin.path + ":" + (ProcessInfo.processInfo.environment["PATH"] ?? "/usr/bin:/bin")
+        env["PATH"] =
+            bin.path + ":" + (ProcessInfo.processInfo.environment["PATH"] ?? "/usr/bin:/bin")
         env["FAKE_CAPTURE_FILE"] = capture.path
         return (env, capture.path)
     }

@@ -78,7 +78,8 @@ public enum SubscriptionCLI {
     ) -> String? {
         guard let value = environment["PATH"] else { return nil }
         for dir in value.split(separator: ":") {
-            let candidate = URL(fileURLWithPath: String(dir)).appendingPathComponent(executable).path
+            let candidate = URL(fileURLWithPath: String(dir)).appendingPathComponent(executable)
+                .path
             if FileManager.default.isExecutableFile(atPath: candidate) { return candidate }
         }
         return nil
@@ -116,9 +117,25 @@ public enum SubscriptionCLI {
             throw SubscriptionCLIError.notInstalled(variant.executable)
         }
         let sanitized = variant.envSanitizer(environment)
+        // Confine the child to an empty throwaway directory so the CLI has no
+        // project to discover, no local files to read, and nothing it could
+        // plausibly claim a tool permission for. A spawned child inherits the
+        // parent's TCC identity, so the workdir keeps every access out of the
+        // user's folders. Cleaned up once the process exits.
+        let workDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("wormtongue-subscription-\(UUID().uuidString)")
+        do {
+            try FileManager.default.createDirectory(
+                at: workDir, withIntermediateDirectories: true)
+        } catch {
+            throw SubscriptionCLIError.launchFailed(
+                variant.executable, error.localizedDescription)
+        }
+        defer { try? FileManager.default.removeItem(at: workDir) }
         return try await withCheckedThrowingContinuation { continuation in
             let process = Process()
             process.executableURL = URL(fileURLWithPath: path)
+            process.currentDirectoryURL = workDir
             process.arguments = args
             process.environment = sanitized
             let out = Pipe()
@@ -194,7 +211,8 @@ public enum SubscriptionCLI {
         guard !joined.isEmpty else {
             throw SubscriptionCLIError.unparseable("claude", "no text response in output")
         }
-        let thinking = thinkings.isEmpty
+        let thinking =
+            thinkings.isEmpty
             ? nil
             : thinkings.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
         return LLMCompletion(text: joined, thinking: thinking)
@@ -313,11 +331,15 @@ public enum CodexSubscriptionCLI {
 public enum ClaudeSubscriptionCLI {
     /// Headless one-shot that reuses the user's own OAuth login.
     ///
-    /// `-p` runs print mode and exits; the model, system prompt, one-shot cap, JSON
-    /// output, and bypassed permission prompts are all explicit so a rewrite never
-    /// stalls on an interactive prompt. `ANTHROPIC_API_KEY`/`ANTHROPIC_AUTH_TOKEN`
-    /// are stripped because the CLI honours them over its OAuth token — Wormtongue
-    /// must not leak a keyed Anthropic credential into a subscription run.
+    /// `-p` runs print mode and exits; the model, system prompt, one-shot cap, and
+    /// JSON output are explicit so a rewrite never stalls on an interactive
+    /// prompt. `--tools ""` disables the CLI's toolset entirely, so the rewrite
+    /// gets a language model, not an agent — nothing can read or write files, run
+    /// shell commands, or fetch the network, and therefore nothing needs a
+    /// permission prompt (hence no `bypassPermissions`). `ANTHROPIC_API_KEY` /
+    /// `ANTHROPIC_AUTH_TOKEN` are stripped because the CLI honours them over its
+    /// OAuth token — Wormtongue must not leak a keyed Anthropic credential into a
+    /// subscription run.
     public static let variant = SubscriptionCLIVariant(
         executable: "claude",
         argBuilder: { prompt in
@@ -327,7 +349,7 @@ public enum ClaudeSubscriptionCLI {
                 "--system-prompt", prompt.system,
                 "--max-turns", "1",
                 "--output-format", "json",
-                "--permission-mode", "bypassPermissions",
+                "--tools", "",
             ]
         },
         envSanitizer: { env in
