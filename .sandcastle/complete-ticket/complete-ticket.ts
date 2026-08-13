@@ -4,6 +4,7 @@ import * as path from "node:path";
 import * as sandcastle from "@ai-hero/sandcastle";
 import { noSandbox } from "@ai-hero/sandcastle/sandboxes/no-sandbox";
 import { createDashboard, type Step } from "../dashboard/dashboard.ts";
+import { fill, parseReviewOutput, parseVerifyOutput } from "./core.ts";
 
 const TICKET = required("TICKET");
 const BASE = process.env.BASE_BRANCH ?? "main";
@@ -39,6 +40,7 @@ const dash = await createDashboard({
   logDir: LOG_DIR,
   open: true,
 });
+const dAuth = dash.command("model access", { icon: "🔑", sub: "one real call per model" });
 const dBaseline = dash.command("baseline gate", { icon: "✓", sub: `./Scripts/check.sh on origin/${BASE}` });
 const dLoop = dash.retryLoop("implement · gate · review", { max: MAX_RETRIES + 1 });
 const dImpl = dLoop.ai("implement", { icon: "✦", sub: IMPL_MODEL });
@@ -48,6 +50,29 @@ const dCheck = dLoop.command("check.sh", { icon: "✓" });
 const dReview = dLoop.ai("review", { icon: "★", sub: REVIEW_MODEL });
 const dVerify = dash.ai("verify steps", { icon: "☰", sub: "only when a PR needs them", optional: true });
 const dRoute = dash.command("route to main", { icon: "⤳", sub: "squash-merge · or open PR" });
+
+// Prove both models answer before building a worktree and running the gate.
+// An empty model catalog and a missing key fail identically far downstream —
+// minutes in, as "pi exited with code 1" wrapped in an install log — and the
+// catalog error names the model, which sends you hunting for a typo that is
+// not there. One real call per model turns both into a first-second failure.
+console.log("\nmodel access: do both models answer?");
+dAuth.start();
+for (const model of [IMPL_MODEL, REVIEW_MODEL]) {
+  const probe = probeModel(model);
+  if (!probe.ok) {
+    console.error(
+      `\n${model} cannot be reached from ${PI_HOME}:\n\n${tail(probe.output, 20)}\n\n` +
+        `If the catalog is empty or the credential is missing, seed the config:\n\n` +
+        `  ${path.relative(process.cwd(), path.join(PI_HOME, "setup.sh"))}\n`,
+    );
+    dAuth.fail(`${model} unreachable`, tail(probe.output, 20));
+    await dash.fail(`${model} cannot be reached`);
+    process.exit(1);
+  }
+  console.log(`  ${model} ok`);
+}
+dAuth.ok("both models answer");
 
 // Not git() — that one runs in the worktree, which does not exist yet.
 execFileSync("git", ["fetch", "origin", BASE], { stdio: "inherit" });
@@ -328,7 +353,7 @@ async function openPullRequest(unobservedFiles: string[]): Promise<void> {
     }),
   );
   dVerify.ok("steps written");
-  const extracted = /<verify>([\s\S]*?)<\/verify>/.exec(steps.stdout)?.[1]?.trim();
+  const extracted = parseVerifyOutput(steps.stdout);
 
   const body =
     `Fixes #${ticket.number}\n\n` +
@@ -469,12 +494,7 @@ process.on("exit", () => {
   }
 });
 
-function fill(template: string, args: Record<string, string>): string {
-  return template.replace(/\{\{(\w+)\}\}/g, (whole, key: string) => {
-    if (!(key in args)) throw new Error(`fix.md references unknown {{${key}}}`);
-    return args[key]!;
-  });
-}
+
 
 async function reviewPass(
   attempt: number,
@@ -490,22 +510,16 @@ async function reviewPass(
     }),
   );
 
-  const match = /<review>([\s\S]*?)<\/review>/.exec(result.stdout);
-  if (!match) {
-    return { verdict: "reject", objections: ["The reviewer emitted no verdict."] };
-  }
-  try {
-    const parsed = JSON.parse(match[1]!) as {
-      verdict: string;
-      objections?: string[];
-    };
-    return { verdict: parsed.verdict, objections: parsed.objections ?? [] };
-  } catch {
+  const parsed = parseReviewOutput(result.stdout);
+  if (parsed.verdict === "unknown") {
     return {
       verdict: "reject",
-      objections: ["The reviewer emitted invalid JSON."],
+      objections: parsed.raw === null
+        ? ["The reviewer emitted no verdict."]
+        : ["The reviewer emitted invalid JSON."],
     };
   }
+  return { verdict: parsed.verdict, objections: parsed.objections };
 }
 
 function pi(model: string): sandcastle.AgentProvider {
@@ -564,6 +578,31 @@ async function handOff(title: string, detail: string): Promise<never> {
 // step.exec streams the command's output live into the dashboard (tagged with
 // the step) instead of buffering it until exit like execFileSync. The verdict
 // stays here: exec reports, the workflow decides.
+// A real one-shot call, not a catalog lookup: `--list-models` is happy with a
+// model whose provider has no credential, which is exactly the pair of
+// failures this guards against.
+function probeModel(model: string): { ok: boolean; output: string } {
+  try {
+    const output = execFileSync(
+      "pi",
+      ["--model", model, "-p", "Reply with the single word: ok"],
+      {
+        env: { ...process.env, PI_CODING_AGENT_DIR: PI_HOME },
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "pipe"],
+        timeout: 120_000,
+      },
+    );
+    return { ok: true, output };
+  } catch (error) {
+    const e = error as { stdout?: string; stderr?: string; message?: string };
+    return {
+      ok: false,
+      output: [e.stdout, e.stderr, e.message].filter(Boolean).join("\n"),
+    };
+  }
+}
+
 async function gate(step: Step): Promise<{ ok: boolean; output: string }> {
   console.log("  running ./Scripts/check.sh");
   const r = await step.exec("./Scripts/check.sh", [], { cwd });

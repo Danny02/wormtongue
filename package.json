@@ -5,7 +5,11 @@
   "description": "Sandcastle agent workflows for wormtongue. Not part of the Swift build.",
   "scripts": {
     "typecheck": "tsc --noEmit",
-    "complete-ticket": "tsx --env-file-if-exists=.sandcastle/.env .sandcastle/complete-ticket/complete-ticket.ts"
+    "complete-ticket": "tsx --env-file-if-exists=.sandcastle/.env .sandcastle/complete-ticket/complete-ticket.ts",
+    "test": "bash .sandcastle/tests/run-tests.sh fast",
+    "test:launch": "bash .sandcastle/tests/run-tests.sh launch",
+    "test:full": "bash .sandcastle/tests/run-tests.sh full",
+    "test:fidelity": "bash .sandcastle/tests/run-tests.sh fidelity"
   },
   "devDependencies": {
     "@ai-hero/sandcastle": "^0.12.0",
